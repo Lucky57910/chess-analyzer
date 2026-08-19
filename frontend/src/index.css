@@ -1,0 +1,39 @@
+@import 'tailwindcss';
+
+@import 'chessground/assets/chessground.base.css';
+@import 'chessground/assets/chessground.brown.css';
+@import 'chessground/assets/chessground.cburnett.css';
+
+@theme {
+  --color-ink-950: #0e1116;
+  --color-ink-900: #151a21;
+  --color-ink-800: #1c232c;
+  --color-ink-700: #263041;
+  --color-ink-500: #6b7a90;
+  --color-ink-300: #a7b3c4;
+  --color-ink-100: #e6ebf2;
+
+  --color-good: #7cb342;
+  --color-inaccuracy: #f2c94c;
+  --color-mistake: #f2994a;
+  --color-blunder: #eb5757;
+  --color-accent: #5b9bd5;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-ink-950);
+  color: var(--color-ink-100);
+  font-family: ui-sans-serif, system-ui, 'Segoe UI', sans-serif;
+}
+
+/* chessground sizes itself from its container */
+.cg-wrap {
+  width: 100%;
+  height: 100%;
+}
