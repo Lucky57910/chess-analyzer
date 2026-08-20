@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
     engine.close_engine()
 
 
-app = FastAPI(title="Chess Analyser", version="1.0.0", lifespan=lifespan)
+app = FastAPI(title="Chess Analyzer", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -49,7 +49,7 @@ app.include_router(stats.router)
 
 @app.get("/")
 def root():
-    return {"service": "chess-analyser", "docs": "/docs"}
+    return {"service": "chess-analyzer", "docs": "/docs"}
 
 
 @app.get("/api/health")

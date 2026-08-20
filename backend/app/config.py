@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     analysis_interval_seconds: int = 5
     sync_months_on_login: int = 3
 
-    chess_com_user_agent: str = "chess-analyser/1.0"
+    chess_com_user_agent: str = "chess-analyzer/1.0"
     cors_origins: str = "http://localhost:5173"
 
     @property

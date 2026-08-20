@@ -46,7 +46,7 @@ export default function Login() {
   return (
     <div className="flex min-h-full items-center justify-center px-4 py-16">
       <div className="w-full max-w-sm">
-        <h1 className="mb-1 text-2xl font-semibold">♞ Chess Analyser</h1>
+        <h1 className="mb-1 text-2xl font-semibold">♞ Chess Analyzer</h1>
         <p className="mb-6 text-sm text-ink-500">
           Vos parties Chess.com, analysées par Stockfish.
         </p>

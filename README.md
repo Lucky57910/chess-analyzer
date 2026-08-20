@@ -1,4 +1,4 @@
-# Chess Analyser
+# Chess Analyzer
 
 Imports your Chess.com games, runs Stockfish over every position, and shows you
 where the games were actually decided: evaluation curve, per-move judgments,
@@ -113,7 +113,7 @@ Postgres instance. The Dockerfile installs Stockfish from Debian
 
 Set by hand after the first deploy:
 
-- `CORS_ORIGINS` → your Vercel URL, e.g. `https://chess-analyser.vercel.app`
+- `CORS_ORIGINS` → your Vercel URL, e.g. `https://chess-analyzer.vercel.app`
 - `REGISTRATION_CODE` → any shared string. **Do this.** The app is on the public
   internet; without a code anyone who finds the URL can register.
 

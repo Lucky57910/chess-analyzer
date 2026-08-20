@@ -1,5 +1,5 @@
 const BASE = import.meta.env.VITE_API_URL || ''
-const TOKEN_KEY = 'chess-analyser-token'
+const TOKEN_KEY = 'chess-analyzer-token'
 
 export function getToken() {
   return localStorage.getItem(TOKEN_KEY)

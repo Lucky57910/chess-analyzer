@@ -14,7 +14,7 @@ export default function Navigation() {
     <header className="border-b border-ink-800 bg-ink-900">
       <nav className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-3">
         <span className="mr-4 text-lg font-semibold tracking-tight">
-          ♞ <span className="text-ink-100">Chess Analyser</span>
+          ♞ <span className="text-ink-100">Chess Analyzer</span>
         </span>
         <NavLink to="/" end className={linkClass}>
           Parties
