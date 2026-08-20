@@ -21,19 +21,19 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // The API sleeps after ~15 min idle on the free tier and takes ~30 s to wake.
 // While it boots, fetch rejects outright (the platform's holding response carries
-// no CORS headers), so retry a few times before giving up on the user.
-async function fetchWithWakeUp(url, init, attempts = 4) {
+// no CORS headers), so keep retrying for longer than a cold start takes.
+const WAKE_UP_BUDGET_MS = 60000
+
+async function fetchWithWakeUp(url, init) {
+  const deadline = Date.now() + WAKE_UP_BUDGET_MS
   for (let attempt = 0; ; attempt++) {
     try {
       return await fetch(url, init)
     } catch {
-      if (attempt >= attempts - 1) {
-        throw new ApiError(
-          0,
-          "Serveur injoignable. S'il vient de se réveiller, réessayez dans une trentaine de secondes.",
-        )
+      if (Date.now() >= deadline) {
+        throw new ApiError(0, 'Serveur injoignable. Réessayez dans une minute.')
       }
-      await sleep(2000 * (attempt + 1))
+      await sleep(Math.min(2000 * (attempt + 1), 8000))
     }
   }
 }
