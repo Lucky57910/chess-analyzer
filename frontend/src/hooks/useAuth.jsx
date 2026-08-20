@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
-import { api, getToken, setToken } from '../utils/api'
+import { ApiError, api, getToken, setToken } from '../utils/api'
 
 const AuthContext = createContext(null)
 
@@ -15,7 +15,11 @@ export function AuthProvider({ children }) {
     api
       .me()
       .then(setUser)
-      .catch(() => setToken(null))
+      .catch((err) => {
+        // Only a rejected token means "log out". A server that is asleep or
+        // unreachable must not cost the user their session.
+        if (err instanceof ApiError && err.status === 401) setToken(null)
+      })
       .finally(() => setLoading(false))
   }, [])
 

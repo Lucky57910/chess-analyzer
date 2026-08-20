@@ -17,13 +17,34 @@ export class ApiError extends Error {
   }
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+// The API sleeps after ~15 min idle on the free tier and takes ~30 s to wake.
+// While it boots, fetch rejects outright (the platform's holding response carries
+// no CORS headers), so retry a few times before giving up on the user.
+async function fetchWithWakeUp(url, init, attempts = 4) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetch(url, init)
+    } catch {
+      if (attempt >= attempts - 1) {
+        throw new ApiError(
+          0,
+          "Serveur injoignable. S'il vient de se réveiller, réessayez dans une trentaine de secondes.",
+        )
+      }
+      await sleep(2000 * (attempt + 1))
+    }
+  }
+}
+
 async function request(path, { method = 'GET', body, auth = true } = {}) {
   const headers = {}
   if (body !== undefined) headers['Content-Type'] = 'application/json'
   const token = getToken()
   if (auth && token) headers.Authorization = `Bearer ${token}`
 
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetchWithWakeUp(`${BASE}${path}`, {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
