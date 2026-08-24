@@ -23,6 +23,11 @@ services:
         value: "18"
       - key: ENGINE_SCAN_DEPTH
         value: "10"
+      # TEMPORARY: re-derives the stored accuracies with the Lichess model at
+      # boot, so the corrected numbers show up without waiting for every game
+      # to come back through the re-analysis queue. Remove after one deploy.
+      - key: RECOMPUTE_ACCURACY_ON_BOOT
+        value: "true"
       - key: POLL_INTERVAL_SECONDS
         value: "90"
 

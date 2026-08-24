@@ -17,6 +17,7 @@ import {
 } from '../utils/chess'
 
 const PHASE_LABEL = { opening: 'Ouverture', middlegame: 'Milieu', endgame: 'Finale' }
+const SWIPE_MIN_PX = 30
 
 const ACCURACY_NOTE =
   'Modèle Lichess : moyenne des coups pondérée par la volatilité de la position, ' +
@@ -115,25 +116,34 @@ export default function GameAnalysis() {
   )
 
   // Swiping across the board walks the game, so a phone never has to reach for
-  // the arrow buttons under it.
+  // the arrow buttons under it. The `touch-pan-y` on the wrapper is what makes
+  // this work on a real device: without it the browser treats a horizontal drag
+  // as its own gesture, takes the sequence over and fires touchcancel instead
+  // of touchend, so the swipe silently never lands.
   const onTouchStart = useCallback((event) => {
+    if (event.touches.length !== 1) return // a pinch, not a swipe
     const touch = event.touches[0]
-    touchStart.current = { x: touch.clientX, y: touch.clientY }
+    touchStart.current = { x: touch.clientX, y: touch.clientY, dx: 0, dy: 0 }
   }, [])
 
-  const onTouchEnd = useCallback(
-    (event) => {
-      const start = touchStart.current
-      touchStart.current = null
-      if (!start) return
-      const touch = event.changedTouches[0]
-      const dx = touch.clientX - start.x
-      const dy = touch.clientY - start.y
-      if (Math.abs(dx) < 40 || Math.abs(dx) <= Math.abs(dy)) return // a scroll, not a swipe
-      goTo(dx < 0 ? ply + 1 : ply - 1)
-    },
-    [goTo, ply],
-  )
+  const onTouchMove = useCallback((event) => {
+    const start = touchStart.current
+    if (!start || event.touches.length !== 1) return
+    start.dx = event.touches[0].clientX - start.x
+    start.dy = event.touches[0].clientY - start.y
+  }, [])
+
+  const onTouchEnd = useCallback(() => {
+    const start = touchStart.current
+    touchStart.current = null
+    if (!start) return
+    if (Math.abs(start.dx) < SWIPE_MIN_PX || Math.abs(start.dx) <= Math.abs(start.dy)) return
+    goTo(start.dx < 0 ? ply + 1 : ply - 1)
+  }, [goTo, ply])
+
+  const onTouchCancel = useCallback(() => {
+    touchStart.current = null
+  }, [])
 
   useEffect(() => {
     function onKey(e) {
@@ -260,9 +270,11 @@ export default function GameAnalysis() {
             timeline must never push the position off screen. */}
         <section className="sticky top-0 z-20 order-1 -mx-4 flex flex-col gap-2 border-b border-ink-800 bg-ink-950 px-4 pb-2 lg:static lg:z-auto lg:order-none lg:col-start-1 lg:row-start-1 lg:mx-0 lg:border-0 lg:px-0 lg:pb-0">
           <div
-            className="mx-auto flex w-full max-w-[min(46vh,30rem)] gap-2 lg:max-w-[min(52vh,30rem)]"
+            className="mx-auto flex w-full max-w-[min(46vh,30rem)] touch-pan-y gap-2 lg:max-w-[min(52vh,30rem)]"
             onTouchStart={onTouchStart}
+            onTouchMove={onTouchMove}
             onTouchEnd={onTouchEnd}
+            onTouchCancel={onTouchCancel}
           >
             <EvalBar move={current} orientation={orientation} />
             <div className="min-w-0 flex-1">
