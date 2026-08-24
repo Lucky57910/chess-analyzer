@@ -24,9 +24,15 @@ function MoveCell({ move, active, onSelect }) {
 export default function MoveList({ moves, currentPly, onSelectPly }) {
   const scrollRef = useRef(null)
 
+  // Deliberately not `scrollIntoView`: it walks every scrollable ancestor, so
+  // on the single-column mobile layout it dragged the whole page down to the
+  // move list and pushed the board off screen. Scroll our own box instead.
   useEffect(() => {
-    const active = scrollRef.current?.querySelector('[data-active]')
-    active?.scrollIntoView({ block: 'nearest' })
+    const box = scrollRef.current
+    const active = box?.querySelector('[data-active]')
+    if (!box || !active) return
+    const target = active.offsetTop - box.clientHeight / 2 + active.clientHeight / 2
+    box.scrollTop = Math.max(0, target)
   }, [currentPly])
 
   const rows = []

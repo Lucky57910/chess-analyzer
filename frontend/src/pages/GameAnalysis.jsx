@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import Board from '../components/Board'
+import EvalBar from '../components/EvalBar'
 import EvalGraph from '../components/EvalGraph'
 import MoveList from '../components/MoveList'
 import { StatTile } from '../components/StatsSummary'
+import { useMediaQuery } from '../hooks/useMediaQuery'
 import { api } from '../utils/api'
 import {
   JUDGMENT_CLASS,
@@ -21,7 +23,7 @@ function NavButton({ children, ...props }) {
   return (
     <button
       type="button"
-      className="rounded-md border border-ink-700 px-3 py-1.5 text-sm text-ink-300 hover:bg-ink-800 disabled:opacity-40"
+      className="rounded-md border border-ink-700 px-2.5 py-1 text-sm text-ink-300 hover:bg-ink-800 disabled:opacity-40 sm:px-3 sm:py-1.5"
       {...props}
     >
       {children}
@@ -72,6 +74,9 @@ export default function GameAnalysis() {
   const [playing, setPlaying] = useState(false)
   const [showBest, setShowBest] = useState(false)
   const [error, setError] = useState(null)
+  const [showGraph, setShowGraph] = useState(false)
+  const isDesktop = useMediaQuery('(min-width: 1024px)')
+  const touchStart = useRef(null)
 
   const load = useCallback(async () => {
     try {
@@ -102,6 +107,27 @@ export default function GameAnalysis() {
   const goTo = useCallback(
     (next) => setPly(Math.max(0, Math.min(moves.length, next))),
     [moves.length],
+  )
+
+  // Swiping across the board walks the game, so a phone never has to reach for
+  // the arrow buttons under it.
+  const onTouchStart = useCallback((event) => {
+    const touch = event.touches[0]
+    touchStart.current = { x: touch.clientX, y: touch.clientY }
+  }, [])
+
+  const onTouchEnd = useCallback(
+    (event) => {
+      const start = touchStart.current
+      touchStart.current = null
+      if (!start) return
+      const touch = event.changedTouches[0]
+      const dx = touch.clientX - start.x
+      const dy = touch.clientY - start.y
+      if (Math.abs(dx) < 40 || Math.abs(dx) <= Math.abs(dy)) return // a scroll, not a swipe
+      goTo(dx < 0 ? ply + 1 : ply - 1)
+    },
+    [goTo, ply],
   )
 
   useEffect(() => {
@@ -213,14 +239,24 @@ export default function GameAnalysis() {
         </p>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="flex flex-col gap-3">
-          {/* cap the board so the eval graph and tiles stay above the fold */}
-          <div className="mx-auto w-full max-w-[min(52vh,30rem)]">
-            <Board fen={fen} orientation={orientation} lastMove={lastMove} shapes={shapes} />
+      {/* One column on phones, two on desktop. Explicit grid placement lets the
+          mobile order differ from the desktop one without duplicating a block. */}
+      <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
+        {/* Board first and pinned: scrolling the move list or the mistake
+            timeline must never push the position off screen. */}
+        <section className="sticky top-0 z-20 order-1 -mx-4 flex flex-col gap-2 border-b border-ink-800 bg-ink-950 px-4 pb-2 lg:static lg:z-auto lg:order-none lg:col-start-1 lg:row-start-1 lg:mx-0 lg:border-0 lg:px-0 lg:pb-0">
+          <div
+            className="mx-auto flex w-full max-w-[min(46vh,30rem)] gap-2 lg:max-w-[min(52vh,30rem)]"
+            onTouchStart={onTouchStart}
+            onTouchEnd={onTouchEnd}
+          >
+            <EvalBar move={current} orientation={orientation} />
+            <div className="min-w-0 flex-1">
+              <Board fen={fen} orientation={orientation} lastMove={lastMove} shapes={shapes} />
+            </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
             <NavButton onClick={() => goTo(0)} disabled={ply === 0}>
               ⏮
             </NavButton>
@@ -236,7 +272,9 @@ export default function GameAnalysis() {
             <NavButton onClick={() => goTo(moves.length)} disabled={ply >= moves.length}>
               ⏭
             </NavButton>
-            <NavButton onClick={() => setFlipped(!flipped)}>⇅ Retourner</NavButton>
+            <NavButton onClick={() => setFlipped(!flipped)}>
+              ⇅<span className="hidden sm:inline"> Retourner</span>
+            </NavButton>
             <NavButton onClick={() => setShowBest(!showBest)} disabled={!bestAvailable}>
               {showingBest ? 'Coup joué' : 'Meilleur coup'}
             </NavButton>
@@ -244,53 +282,65 @@ export default function GameAnalysis() {
               {ply} / {moves.length} · {formatEval(current)}
             </span>
           </div>
+        </section>
 
-          {analysis && (
-            <div className="rounded-lg border border-ink-800 bg-ink-900 p-2">
-              <EvalGraph moves={moves} currentPly={ply} onSelectPly={setPly} />
-            </div>
-          )}
-
-          {analysis && (
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-              <StatTile
-                label="Précision"
-                value={accuracy != null ? `${accuracy}%` : null}
-                hint={acpl != null ? `${acpl} cp / coup` : undefined}
-                tone={accuracy >= 85 ? 'good' : accuracy >= 70 ? 'warn' : 'bad'}
-              />
-              <StatTile label="Imprécisions" value={counts.inaccuracy ?? 0} />
-              <StatTile
-                label="Erreurs"
-                value={counts.mistake ?? 0}
-                tone={counts.mistake ? 'warn' : 'good'}
-              />
-              <StatTile
-                label="Gaffes"
-                value={counts.blunder ?? 0}
-                hint={weakest ? `Phase faible : ${PHASE_LABEL[weakest[0]]}` : undefined}
-                tone={counts.blunder ? 'bad' : 'good'}
-              />
-            </div>
-          )}
+        <div className="order-2 h-56 rounded-lg border border-ink-800 bg-ink-900 lg:order-none lg:col-start-2 lg:row-start-1 lg:h-80">
+          <MoveList moves={moves} currentPly={ply} onSelectPly={setPly} />
         </div>
 
-        <div className="flex flex-col gap-4">
-          <div className="h-80 rounded-lg border border-ink-800 bg-ink-900">
-            <MoveList moves={moves} currentPly={ply} onSelectPly={setPly} />
-          </div>
-          <div className="rounded-lg border border-ink-800 bg-ink-900">
-            <h3 className="border-b border-ink-700 px-3 py-2 text-sm font-medium text-ink-300">
-              Vos coups manqués
-            </h3>
-            <MistakeTimeline
-              moves={moves}
-              userColor={userColor}
-              currentPly={ply}
-              onSelectPly={setPly}
+        <div className="order-3 rounded-lg border border-ink-800 bg-ink-900 lg:order-none lg:col-start-2 lg:row-start-2 lg:row-span-2">
+          <h3 className="border-b border-ink-700 px-3 py-2 text-sm font-medium text-ink-300">
+            Vos coups manqués
+          </h3>
+          <MistakeTimeline
+            moves={moves}
+            userColor={userColor}
+            currentPly={ply}
+            onSelectPly={setPly}
+          />
+        </div>
+
+        {analysis && (
+          <div className="order-4 grid grid-cols-2 gap-3 lg:order-none lg:col-start-1 lg:row-start-3 lg:grid-cols-4">
+            <StatTile
+              label="Précision"
+              value={accuracy != null ? `${accuracy}%` : null}
+              hint={acpl != null ? `${acpl} cp / coup` : undefined}
+              tone={accuracy >= 85 ? 'good' : accuracy >= 70 ? 'warn' : 'bad'}
+            />
+            <StatTile label="Imprécisions" value={counts.inaccuracy ?? 0} />
+            <StatTile
+              label="Erreurs"
+              value={counts.mistake ?? 0}
+              tone={counts.mistake ? 'warn' : 'good'}
+            />
+            <StatTile
+              label="Gaffes"
+              value={counts.blunder ?? 0}
+              hint={weakest ? `Phase faible : ${PHASE_LABEL[weakest[0]]}` : undefined}
+              tone={counts.blunder ? 'bad' : 'good'}
             />
           </div>
-        </div>
+        )}
+
+        {/* The eval bar already tracks domination move by move, so on a phone the
+            curve is opt-in and sits last instead of stealing the fold. */}
+        {analysis && (
+          <section className="order-5 flex flex-col gap-2 lg:order-none lg:col-start-1 lg:row-start-2">
+            <button
+              type="button"
+              onClick={() => setShowGraph(!showGraph)}
+              className="rounded-md border border-ink-700 px-3 py-1.5 text-sm text-ink-300 hover:bg-ink-800 lg:hidden"
+            >
+              {showGraph ? 'Masquer la courbe' : 'Afficher la courbe d’évaluation'}
+            </button>
+            {(showGraph || isDesktop) && (
+              <div className="rounded-lg border border-ink-800 bg-ink-900 p-2">
+                <EvalGraph moves={moves} currentPly={ply} onSelectPly={setPly} />
+              </div>
+            )}
+          </section>
+        )}
       </div>
     </div>
   )
