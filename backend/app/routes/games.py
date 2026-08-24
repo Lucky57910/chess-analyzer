@@ -62,6 +62,10 @@ def get_game(game_id: int, user: User = Depends(get_current_user), db: Session =
     return _serialize(_owned_game(game_id, user, db), detail=True)
 
 
+# Rows analysed before the payload was slimmed still carry this per move.
+STALE_MOVE_FIELDS = ("fen_after",)
+
+
 @router.get("/games/{game_id}/analysis", response_model=AnalysisOut)
 def get_analysis(
     game_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -72,7 +76,11 @@ def get_analysis(
             status.HTTP_404_NOT_FOUND,
             f"No analysis yet (status: {game.analysis_status})",
         )
-    return game.analysis
+    out = AnalysisOut.model_validate(game.analysis)
+    out.moves = [
+        {k: v for k, v in move.items() if k not in STALE_MOVE_FIELDS} for move in out.moves
+    ]
+    return out
 
 
 @router.post("/games/{game_id}/refresh", response_model=GameDetailOut)

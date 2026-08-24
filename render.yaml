@@ -22,7 +22,7 @@ services:
       - key: ENGINE_DEPTH
         value: "14"
       - key: POLL_INTERVAL_SECONDS
-        value: "15"
+        value: "90"
 
 databases:
   - name: chess-analyzer-db

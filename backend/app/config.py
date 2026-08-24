@@ -28,8 +28,14 @@ class Settings(BaseSettings):
     # to false. Cheap - it never touches the engine.
     recompute_accuracy_on_boot: bool = False
 
-    poll_interval_seconds: int = 15
+    poll_interval_seconds: int = 90
     analysis_interval_seconds: int = 5
+
+    # The analysis worker and the web server share one CPU on the free tier, so
+    # the worker stands down while requests are coming in - but never for longer
+    # than `analysis_max_defer_seconds`, or a browsing session would starve it.
+    analysis_quiet_seconds: float = 3.0
+    analysis_max_defer_seconds: float = 120.0
     sync_months_on_login: int = 3
 
     chess_com_user_agent: str = "chess-analyzer/1.0"

@@ -7,6 +7,7 @@ length of a game, and overlapping pollers would just duplicate work.
 from __future__ import annotations
 
 import logging
+import time
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -17,6 +18,31 @@ from app.services import analysis
 log = logging.getLogger(__name__)
 
 _scheduler: BackgroundScheduler | None = None
+
+_last_request_at = 0.0
+_deferred_since = 0.0
+
+
+def note_request() -> None:
+    """Marks the server as busy. Called from the HTTP middleware."""
+    global _last_request_at
+    _last_request_at = time.monotonic()
+
+
+def _should_defer() -> bool:
+    """True while HTTP traffic is recent enough that Stockfish would be felt."""
+    global _deferred_since
+    now = time.monotonic()
+    if now - _last_request_at >= settings.analysis_quiet_seconds:
+        _deferred_since = 0.0
+        return False
+    if not _deferred_since:
+        _deferred_since = now
+        return True
+    if now - _deferred_since >= settings.analysis_max_defer_seconds:
+        _deferred_since = 0.0  # take the CPU back, the queue has waited enough
+        return False
+    return True
 
 
 def _poll_job() -> None:
@@ -32,6 +58,8 @@ def _poll_job() -> None:
 
 
 def _analysis_job() -> None:
+    if _should_defer():
+        return
     db = SessionLocal()
     try:
         # Drain a few per tick so a backlog after a sleep clears reasonably fast.

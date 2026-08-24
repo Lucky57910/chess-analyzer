@@ -96,25 +96,48 @@ def next_pending_game(db: Session) -> Game | None:
     ).first()
 
 
-def analyse_game(db: Session, game: Game) -> Analysis | None:
-    """Run Stockfish over one game and persist the result."""
-    game.analysis_status = "running"
-    game.analysis_attempts += 1
-    db.commit()
+def next_stale_game(db: Session) -> Game | None:
+    """A game whose analysis was run at a shallower depth than we use now.
+
+    Picked up only once nothing is pending, so fresh games always win the CPU.
+    """
+    return db.scalars(
+        select(Game)
+        .join(Analysis, Analysis.game_id == Game.id)
+        .where(Game.analysis_status == "done")
+        .where(Analysis.engine_depth < settings.engine_depth)
+        .order_by(Game.end_time.desc())
+        .limit(1)
+    ).first()
+
+
+def analyse_game(db: Session, game: Game, *, refresh: bool = False) -> Analysis | None:
+    """Run Stockfish over one game and persist the result.
+
+    `refresh=True` re-runs a game that already has a result. The status and the
+    stored numbers are left untouched until the new ones overwrite them, so a
+    depth upgrade rolls through the archive without blanking anybody's screen.
+    """
+    if not refresh:
+        game.analysis_status = "running"
+        game.analysis_attempts += 1
+        db.commit()
 
     try:
         result = engine.analyse_pgn(game.pgn)
     except engine.EngineUnavailable as exc:
-        # Not the game's fault: leave it pending and do not burn an attempt.
-        game.analysis_status = "pending"
-        game.analysis_attempts -= 1
-        game.analysis_error = str(exc)
-        db.commit()
+        if not refresh:
+            # Not the game's fault: leave it pending and do not burn an attempt.
+            game.analysis_status = "pending"
+            game.analysis_attempts -= 1
+            game.analysis_error = str(exc)
+            db.commit()
         raise
     except Exception as exc:
-        game.analysis_status = "error"
-        game.analysis_error = f"{type(exc).__name__}: {exc}"
-        db.commit()
+        if not refresh:
+            game.analysis_status = "error"
+            game.analysis_error = f"{type(exc).__name__}: {exc}"
+            db.commit()
         log.warning("analysis failed for game %s: %s", game.id, exc)
         return None
 
@@ -146,15 +169,23 @@ def analyse_game(db: Session, game: Game) -> Analysis | None:
 
 
 def analyse_next_pending(db: Session) -> bool:
-    """Analyse one queued game. Returns True if work was done."""
-    game = next_pending_game(db)
+    """Analyse one queued game, else upgrade one stale one. True if work was done.
+
+    Nothing is ever deleted or re-queued to reach a new engine depth: the old
+    result stays live and is replaced in place when its turn comes.
+    """
+    game, refresh = next_pending_game(db), False
+    if game is None:
+        game, refresh = next_stale_game(db), True
     if game is None:
         return False
     try:
-        analyse_game(db, game)
+        analyse_game(db, game, refresh=refresh)
     except engine.EngineUnavailable as exc:
         log.error("engine unavailable, analysis paused: %s", exc)
         return False
+    if refresh:
+        log.info("re-analysed game %s at depth %s", game.id, settings.engine_depth)
     return True
 
 

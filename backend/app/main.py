@@ -3,8 +3,9 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from app.config import settings
 from app.db.session import SessionLocal, init_db
@@ -41,6 +42,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Chess Analyzer", version="1.0.0", lifespan=lifespan)
 
+# Added before CORS so CORS ends up the outer layer and still answers preflight.
+# Analysis payloads are long JSON move lists and compress by roughly 10x.
+app.add_middleware(GZipMiddleware, minimum_size=500)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origin_list,
@@ -48,6 +53,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def track_activity(request: Request, call_next):
+    """Let the analysis worker know somebody is using the site."""
+    scheduler.note_request()
+    try:
+        return await call_next(request)
+    finally:
+        scheduler.note_request()
+
 
 app.include_router(auth.router)
 app.include_router(games.router)

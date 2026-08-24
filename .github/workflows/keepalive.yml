@@ -1,0 +1,28 @@
+# Pings the API so Render's free tier does not spin it down.
+#
+# A free instance sleeps after 15 minutes idle and takes ~50 s to wake, which is
+# what the client's wake-up retry loop exists to survive. Keeping it warm makes
+# that loop dead code in practice.
+#
+# Two things to know before relying on this:
+#   * GitHub delays scheduled workflows under load, often past the 15 min window,
+#     and disables them after 60 days without repo activity. An external pinger
+#     (cron-job.org, UptimeRobot) is more dependable.
+#   * Render bills 750 free instance-hours per month across the whole account,
+#     and staying up 24/7 costs ~730 of them. This is affordable with exactly
+#     one free service, and not with two.
+name: keepalive
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wake the API
+        run: |
+          curl --silent --show-error --fail --retry 3 --retry-delay 20 --max-time 90 \
+            https://chess-analyzer-api-4kam.onrender.com/api/health

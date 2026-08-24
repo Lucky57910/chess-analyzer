@@ -197,7 +197,7 @@ def analyse_pgn(pgn: str, depth: int | None = None) -> dict:
                 "color": "white" if mover_white else "black",
                 "san": san,
                 "uci": move.uci(),
-                "fen_after": replay.fen(),
+                # No FEN here: the client replays the PGN it already holds.
                 "eval_cp": after["cp"],  # White POV, drives the graph
                 "eval_mate": after["mate"],
                 "eval_cp_before": before["cp"],

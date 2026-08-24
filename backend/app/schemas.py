@@ -95,8 +95,6 @@ class AnalysisOut(BaseModel):
     engine_depth: int
     moves_evaluated: int
     moves: list
-    errors: list
-    blunders: list
     accuracy_white: float | None
     accuracy_black: float | None
     acpl_white: float | None
