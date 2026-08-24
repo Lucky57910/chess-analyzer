@@ -16,6 +16,7 @@ from app.services import chess_com, engine
 log = logging.getLogger(__name__)
 
 MAX_ANALYSIS_ATTEMPTS = 3
+RECOMPUTE_CHUNK = 50
 
 
 def sync_user_games(db: Session, user: User, months: int | None = None) -> int:
@@ -199,17 +200,26 @@ def recompute_stored_accuracies(db: Session) -> int:
     aggregation model (arithmetic mean -> Lichess weighted/harmonic blend) does
     not need Stockfish to run again. Returns how many rows actually changed.
     """
+    # In chunks, and expunged as we go: every row carries the game's whole move
+    # list, and holding all of them at once is a real risk on a 512 MB instance.
+    ids = list(db.scalars(select(Analysis.id)))
     changed = 0
-    for row in db.scalars(select(Analysis)).all():
-        moves = row.moves or []
-        if not moves:
-            continue
-        before = (row.accuracy_white, row.accuracy_black)
-        for key, value in engine.aggregate(moves).items():
-            setattr(row, key, value)
-        if before != (row.accuracy_white, row.accuracy_black):
-            changed += 1
-    db.commit()
+    for start in range(0, len(ids), RECOMPUTE_CHUNK):
+        batch = db.scalars(
+            select(Analysis).where(Analysis.id.in_(ids[start : start + RECOMPUTE_CHUNK]))
+        ).all()
+        for row in batch:
+            moves = row.moves or []
+            if not moves:
+                continue
+            before = (row.accuracy_white, row.accuracy_black)
+            for key, value in engine.aggregate(moves).items():
+                setattr(row, key, value)
+            if before != (row.accuracy_white, row.accuracy_black):
+                changed += 1
+        db.commit()
+        for row in batch:
+            db.expunge(row)
     return changed
 
 

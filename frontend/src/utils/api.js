@@ -19,22 +19,50 @@ export class ApiError extends Error {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-// The API sleeps after ~15 min idle on the free tier and takes ~30 s to wake.
-// While it boots, fetch rejects outright (the platform's holding response carries
-// no CORS headers), so keep retrying for longer than a cold start takes.
-const WAKE_UP_BUDGET_MS = 60000
+// The API sleeps after ~15 min idle on the free tier. While it boots, fetch
+// rejects outright (the platform's holding response carries no CORS headers),
+// so we retry for longer than a cold start takes. Measured at 86 s on the free
+// instance, so the old 60 s budget gave up while the server was still coming
+// back and told the user it was unreachable, which was simply untrue.
+const WAKE_UP_BUDGET_MS = 150000
+
+// A set, not a single slot: a second subscriber must not silently evict the
+// first, and unsubscribing must only remove its own listener.
+const wakingListeners = new Set()
+
+/** Subscribe to "the server is asleep and we are waiting for it". */
+export function onWakingUp(listener) {
+  wakingListeners.add(listener)
+  return () => wakingListeners.delete(listener)
+}
+
+function announceWaking(waking) {
+  for (const listener of wakingListeners) listener(waking)
+}
 
 async function fetchWithWakeUp(url, init) {
   const deadline = Date.now() + WAKE_UP_BUDGET_MS
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fetch(url, init)
-    } catch {
-      if (Date.now() >= deadline) {
-        throw new ApiError(0, 'Serveur injoignable. Réessayez dans une minute.')
+  let announced = false
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await fetch(url, init)
+      } catch {
+        if (Date.now() >= deadline) {
+          throw new ApiError(
+            0,
+            'Le serveur ne répond pas après deux minutes. Réessayez dans un instant.',
+          )
+        }
+        if (!announced) {
+          announced = true
+          announceWaking(true)
+        }
+        await sleep(Math.min(2000 * (attempt + 1), 8000))
       }
-      await sleep(Math.min(2000 * (attempt + 1), 8000))
     }
+  } finally {
+    if (announced) announceWaking(false)
   }
 }
 

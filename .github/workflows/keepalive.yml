@@ -5,9 +5,13 @@
 # that loop dead code in practice.
 #
 # Two things to know before relying on this:
-#   * GitHub delays scheduled workflows under load, often past the 15 min window,
-#     and disables them after 60 days without repo activity. An external pinger
-#     (cron-job.org, UptimeRobot) is more dependable.
+#   * GitHub delays scheduled workflows badly. Measured on this repo: two runs
+#     45 minutes apart on a */10 schedule, against a 15 minute sleep window, so
+#     the instance slept anyway. Asking every 5 minutes only improves the odds
+#     that one lands in time - it is not a fix. An external pinger
+#     (cron-job.org, UptimeRobot) is the dependable free option, and the paid
+#     Render instance is the one that removes the problem instead of papering
+#     over it.
 #   * Render bills 750 free instance-hours per month across the whole account,
 #     and staying up 24/7 costs ~730 of them. This is affordable with exactly
 #     one free service, and not with two.
@@ -15,7 +19,7 @@ name: keepalive
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:

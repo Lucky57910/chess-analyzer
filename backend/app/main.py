@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -19,6 +20,17 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 
+def _recompute_accuracies() -> None:
+    db = SessionLocal()
+    try:
+        log.info("recomputed accuracies for %s analysis row(s)",
+                 analysis.recompute_stored_accuracies(db))
+    except Exception as exc:  # a background chore must never take the app down
+        log.warning("accuracy recompute failed: %s", exc)
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -28,12 +40,10 @@ async def lifespan(app: FastAPI):
     else:
         log.warning("engine NOT ready: %s", info.get("error"))
     if settings.recompute_accuracy_on_boot:
-        db = SessionLocal()
-        try:
-            changed = analysis.recompute_stored_accuracies(db)
-            log.info("recomputed accuracies for %s analysis row(s)", changed)
-        finally:
-            db.close()
+        # Off the boot path deliberately. The startup hook gates the health
+        # check, and on the free tier a slow boot is exactly what makes the
+        # first visit of the day time out in the browser.
+        threading.Thread(target=_recompute_accuracies, daemon=True).start()
     scheduler.start_scheduler()
     yield
     scheduler.stop_scheduler()

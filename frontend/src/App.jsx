@@ -1,6 +1,7 @@
 import { Suspense, lazy } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import Navigation from './components/Navigation'
+import WakeUpBanner from './components/WakeUpBanner'
 import { useAuth } from './hooks/useAuth'
 import Login from './pages/Login'
 
@@ -29,41 +30,44 @@ function Protected({ children }) {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<Login />} />
-      <Route
-        path="/"
-        element={
-          <Protected>
-            <Dashboard />
-          </Protected>
-        }
-      />
-      <Route
-        path="/games/:gameId"
-        element={
-          <Protected>
-            <GameAnalysis />
-          </Protected>
-        }
-      />
-      <Route
-        path="/stats"
-        element={
-          <Protected>
-            <Stats />
-          </Protected>
-        }
-      />
-      <Route
-        path="/settings"
-        element={
-          <Protected>
-            <Settings />
-          </Protected>
-        }
-      />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    <>
+      <WakeUpBanner />
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route
+          path="/"
+          element={
+            <Protected>
+              <Dashboard />
+            </Protected>
+          }
+        />
+        <Route
+          path="/games/:gameId"
+          element={
+            <Protected>
+              <GameAnalysis />
+            </Protected>
+          }
+        />
+        <Route
+          path="/stats"
+          element={
+            <Protected>
+              <Stats />
+            </Protected>
+          }
+        />
+        <Route
+          path="/settings"
+          element={
+            <Protected>
+              <Settings />
+            </Protected>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </>
   )
 }
