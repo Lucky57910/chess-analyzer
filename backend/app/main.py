@@ -7,9 +7,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.db.session import init_db
+from app.db.session import SessionLocal, init_db
 from app.routes import auth, games, stats
-from app.services import engine, scheduler
+from app.services import analysis, engine, scheduler
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,6 +26,13 @@ async def lifespan(app: FastAPI):
         log.info("engine ready: %s", info["name"])
     else:
         log.warning("engine NOT ready: %s", info.get("error"))
+    if settings.recompute_accuracy_on_boot:
+        db = SessionLocal()
+        try:
+            changed = analysis.recompute_stored_accuracies(db)
+            log.info("recomputed accuracies for %s analysis row(s)", changed)
+        finally:
+            db.close()
     scheduler.start_scheduler()
     yield
     scheduler.stop_scheduler()

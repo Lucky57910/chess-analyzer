@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     engine_hash_mb: int = 64
     max_plies: int = 200
 
+    # One-shot switch for hosts with no shell (Render free): re-derives stored
+    # accuracies at boot after the aggregation model changes, then can go back
+    # to false. Cheap - it never touches the engine.
+    recompute_accuracy_on_boot: bool = False
+
     poll_interval_seconds: int = 15
     analysis_interval_seconds: int = 5
     sync_months_on_login: int = 3

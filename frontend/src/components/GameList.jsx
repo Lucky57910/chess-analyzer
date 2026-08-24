@@ -54,7 +54,15 @@ function GameRow({ game }) {
       <div className="text-right text-xs text-ink-300">
         {game.analysis_status === 'done' ? (
           <>
-            <div className="font-mono text-sm text-ink-100">{game.accuracy?.toFixed(1)}%</div>
+            <div className="font-mono text-sm text-ink-100">
+              {game.accuracy?.toFixed(1)}%
+              {game.chess_com_accuracy != null && (
+                <span className="text-ink-500" title="Précision Chess.com (CAPS2)">
+                  {' '}
+                  / {game.chess_com_accuracy.toFixed(1)}
+                </span>
+              )}
+            </div>
             <div className="text-ink-500">
               {game.blunders ?? 0} gaffe{(game.blunders ?? 0) > 1 ? 's' : ''} ·{' '}
               {game.mistakes ?? 0} err.

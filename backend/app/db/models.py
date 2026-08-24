@@ -61,6 +61,10 @@ class Game(Base):
     played_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     end_time: Mapped[int] = mapped_column(Integer, default=0, index=True)
 
+    # Chess.com's own CAPS2 number, when the game was reviewed on their side.
+    # Kept next to ours so the two models can be shown side by side.
+    chess_com_accuracy: Mapped[float | None] = mapped_column(Float, default=None)
+
     analysis_status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     analysis_error: Mapped[str | None] = mapped_column(Text, default=None)
     analysis_attempts: Mapped[int] = mapped_column(Integer, default=0)

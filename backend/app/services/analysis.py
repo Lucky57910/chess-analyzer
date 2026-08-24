@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -32,18 +32,35 @@ def sync_user_games(db: Session, user: User, months: int | None = None) -> int:
     else:
         raw_games = chess_com.fetch_recent_months(user.chess_com_username, months)
 
-    existing = set(
-        db.scalars(select(Game.chess_com_game_id).where(Game.user_id == user.id)).all()
-    )
+    known = {
+        chess_com_id: (row_id, accuracy)
+        for row_id, chess_com_id, accuracy in db.execute(
+            select(Game.id, Game.chess_com_game_id, Game.chess_com_accuracy).where(
+                Game.user_id == user.id
+            )
+        ).all()
+    }
 
     inserted = 0
     newest = user.last_game_end_time
     for raw in raw_games:
         data = chess_com.normalize_game(raw, user.chess_com_username)
-        if data is None or data["chess_com_game_id"] in existing:
+        if data is None:
+            continue
+        chess_com_id = data["chess_com_game_id"]
+        if chess_com_id in known:
+            # Chess.com only fills the accuracy in once the game has been
+            # reviewed on their side, which often happens after the import.
+            row_id, stored = known[chess_com_id]
+            if stored is None and data["chess_com_accuracy"] is not None:
+                db.execute(
+                    update(Game)
+                    .where(Game.id == row_id)
+                    .values(chess_com_accuracy=data["chess_com_accuracy"])
+                )
             continue
         db.add(Game(user_id=user.id, **data))
-        existing.add(data["chess_com_game_id"])
+        known[chess_com_id] = (None, data["chess_com_accuracy"])
         newest = max(newest, data["end_time"])
         inserted += 1
 
@@ -139,6 +156,27 @@ def analyse_next_pending(db: Session) -> bool:
         log.error("engine unavailable, analysis paused: %s", exc)
         return False
     return True
+
+
+def recompute_stored_accuracies(db: Session) -> int:
+    """Re-derive stored aggregates from the per-move data already on disk.
+
+    The numbers inside `Analysis.moves` are raw engine output, so changing the
+    aggregation model (arithmetic mean -> Lichess weighted/harmonic blend) does
+    not need Stockfish to run again. Returns how many rows actually changed.
+    """
+    changed = 0
+    for row in db.scalars(select(Analysis)).all():
+        moves = row.moves or []
+        if not moves:
+            continue
+        before = (row.accuracy_white, row.accuracy_black)
+        for key, value in engine.aggregate(moves).items():
+            setattr(row, key, value)
+        if before != (row.accuracy_white, row.accuracy_black):
+            changed += 1
+    db.commit()
+    return changed
 
 
 def user_facing_accuracy(analysis: Analysis, game: Game) -> float | None:

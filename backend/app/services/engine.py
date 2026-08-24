@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import logging
 import math
+import statistics
 import threading
 
 import chess
@@ -26,6 +27,14 @@ CLIP_CP = 1_000  # beyond +-10 pawns a position is winning; further gain is nois
 INACCURACY_CP = 50
 MISTAKE_CP = 100
 BLUNDER_CP = 300
+
+# Accuracy aggregation (Lichess model). The window slides over the win% curve
+# and its standard deviation becomes the weight of the move played inside it.
+ACCURACY_WINDOW_MIN = 2
+ACCURACY_WINDOW_MAX = 8
+WEIGHT_MIN = 0.5
+WEIGHT_MAX = 12.0
+HARMONIC_FLOOR = 0.5
 
 _engine: chess.engine.SimpleEngine | None = None
 _engine_lock = threading.Lock()
@@ -211,6 +220,57 @@ def analyse_pgn(pgn: str, depth: int | None = None) -> dict:
     }
 
 
+def _position_win_percents(moves: list[dict]) -> list[float]:
+    """White-POV win% for every position of the game, starting position included."""
+    if not moves:
+        return []
+    opening = moves[0].get("eval_cp_before")
+    series = [win_percent_white(opening if opening is not None else 0)]
+    series += [win_percent_white(m["eval_cp"] if m["eval_cp"] is not None else 0) for m in moves]
+    return series
+
+
+def _volatility_weights(win_percents: list[float]) -> list[float]:
+    """How much each move counts, from how sharp the position was around it.
+
+    A slip in a knife-edge position matters more than one in a settled endgame,
+    so every move is weighted by the standard deviation of the win% inside a
+    sliding window. The first window is repeated to cover the opening moves,
+    which have no history behind them.
+    """
+    n = len(win_percents)
+    if n < 2:
+        return [WEIGHT_MIN] * n
+    size = max(ACCURACY_WINDOW_MIN, min(ACCURACY_WINDOW_MAX, n // 10))
+    if n <= size:
+        windows = [win_percents] * n
+    else:
+        windows = [win_percents[:size]] * (size - 1)
+        windows += [win_percents[i : i + size] for i in range(n - size + 1)]
+    return [max(WEIGHT_MIN, min(WEIGHT_MAX, statistics.pstdev(w))) for w in windows]
+
+
+def _blend_accuracy(pairs: list[tuple[float, float]]) -> float | None:
+    """Lichess' game accuracy: the mean of a weighted mean and a harmonic mean.
+
+    The plain arithmetic mean we used before let two blunders hide behind forty
+    quiet moves, which is why our numbers read ~15 points above Chess.com's. The
+    harmonic half punishes a single terrible move the way a human reviewer does.
+    """
+    if not pairs:
+        return None
+    total_weight = sum(weight for _, weight in pairs)
+    weighted = (
+        sum(acc * weight for acc, weight in pairs) / total_weight
+        if total_weight
+        else sum(acc for acc, _ in pairs) / len(pairs)
+    )
+    # One exact zero would drag the harmonic mean to zero and swallow the whole
+    # game, so the per-move values are floored just above it.
+    harmonic = len(pairs) / sum(1 / max(acc, HARMONIC_FLOOR) for acc, _ in pairs)
+    return round(max(0.0, min(100.0, (weighted + harmonic) / 2)), 1)
+
+
 def aggregate(moves: list[dict]) -> dict:
     """Per-colour accuracy, ACPL, judgment counts and phase breakdown."""
     out: dict = {
@@ -221,11 +281,14 @@ def aggregate(moves: list[dict]) -> dict:
         "judgment_counts": {},
         "phase_stats": {},
     }
+    weights = _volatility_weights(_position_win_percents(moves))
     for color in ("white", "black"):
         side = [m for m in moves if m["color"] == color]
         if not side:
             continue
-        out[f"accuracy_{color}"] = round(sum(m["accuracy"] for m in side) / len(side), 1)
+        out[f"accuracy_{color}"] = _blend_accuracy(
+            [(m["accuracy"], w) for m, w in zip(moves, weights) if m["color"] == color]
+        )
         out[f"acpl_{color}"] = round(sum(m["cp_loss"] for m in side) / len(side), 1)
         out["judgment_counts"][color] = {
             j: sum(1 for m in side if m["judgment"] == j)
@@ -235,10 +298,17 @@ def aggregate(moves: list[dict]) -> dict:
         for phase in ("opening", "middlegame", "endgame"):
             in_phase = [m for m in side if m["phase"] == phase]
             if in_phase:
+                in_phase_plies = {m["ply"] for m in in_phase}
                 phases[phase] = {
                     "moves": len(in_phase),
                     "acpl": round(sum(m["cp_loss"] for m in in_phase) / len(in_phase), 1),
-                    "accuracy": round(sum(m["accuracy"] for m in in_phase) / len(in_phase), 1),
+                    "accuracy": _blend_accuracy(
+                        [
+                            (m["accuracy"], w)
+                            for m, w in zip(moves, weights)
+                            if m["ply"] in in_phase_plies
+                        ]
+                    ),
                 }
         out["phase_stats"][color] = phases
     return out

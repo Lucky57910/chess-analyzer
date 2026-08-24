@@ -17,6 +17,11 @@ import {
 } from '../utils/chess'
 
 const PHASE_LABEL = { opening: 'Ouverture', middlegame: 'Milieu', endgame: 'Finale' }
+
+const ACCURACY_NOTE =
+  'Modèle Lichess : moyenne des coups pondérée par la volatilité de la position, ' +
+  'mélangée à leur moyenne harmonique. Chess.com utilise CAPS2, qui est propriétaire ' +
+  'et analyse plus profondément — quelques points d’écart sont normaux.'
 const RESULT_LABEL = { win: 'Victoire', loss: 'Défaite', draw: 'Nulle' }
 
 function NavButton({ children, ...props }) {
@@ -184,6 +189,15 @@ export default function GameAnalysis() {
   const phases = analysis?.phase_stats?.[userColor] || {}
   const weakest = Object.entries(phases).sort((a, b) => b[1].acpl - a[1].acpl)[0]
 
+  // Our number and Chess.com's come from different models, so show both rather
+  // than pretend they should match.
+  const accuracyHint = [
+    acpl != null ? `${acpl} cp / coup` : null,
+    game.chess_com_accuracy != null ? `Chess.com ${game.chess_com_accuracy.toFixed(1)}%` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -305,7 +319,8 @@ export default function GameAnalysis() {
             <StatTile
               label="Précision"
               value={accuracy != null ? `${accuracy}%` : null}
-              hint={acpl != null ? `${acpl} cp / coup` : undefined}
+              hint={accuracyHint || undefined}
+              title={ACCURACY_NOTE}
               tone={accuracy >= 85 ? 'good' : accuracy >= 70 ? 'warn' : 'bad'}
             />
             <StatTile label="Imprécisions" value={counts.inaccuracy ?? 0} />

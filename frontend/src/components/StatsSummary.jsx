@@ -1,4 +1,4 @@
-export function StatTile({ label, value, hint, tone = 'default' }) {
+export function StatTile({ label, value, hint, tone = 'default', title }) {
   const toneClass = {
     default: 'text-ink-100',
     good: 'text-good',
@@ -7,7 +7,7 @@ export function StatTile({ label, value, hint, tone = 'default' }) {
   }[tone]
 
   return (
-    <div className="rounded-lg border border-ink-800 bg-ink-900 px-4 py-3">
+    <div className="rounded-lg border border-ink-800 bg-ink-900 px-4 py-3" title={title}>
       <div className="text-xs uppercase tracking-wide text-ink-500">{label}</div>
       <div className={`mt-1 text-2xl font-semibold tabular-nums ${toneClass}`}>
         {value ?? '—'}

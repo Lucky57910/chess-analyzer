@@ -72,6 +72,9 @@ class GameOut(BaseModel):
     analysis_status: str
     analysis_error: str | None
 
+    # Chess.com's own number, for side-by-side comparison with ours
+    chess_com_accuracy: float | None = None
+
     # flattened from the analysis, so the dashboard needs one request
     accuracy: float | None = None
     acpl: float | None = None

@@ -124,6 +124,10 @@ def normalize_game(raw: dict, chess_com_username: str) -> dict | None:
     headers = _pgn_headers(pgn)
     end_time = int(raw.get("end_time") or 0)
 
+    # Only present once the game has been reviewed on Chess.com.
+    accuracies = raw.get("accuracies") or {}
+    chess_com_accuracy = accuracies.get(color)
+
     return {
         "chess_com_game_id": str(raw.get("uuid") or raw.get("url") or end_time),
         "url": raw.get("url"),
@@ -139,6 +143,7 @@ def normalize_game(raw: dict, chess_com_username: str) -> dict | None:
         "rated": bool(raw.get("rated", True)),
         "eco": (headers.get("ECO") or None),
         "opening": _opening_name(headers),
+        "chess_com_accuracy": chess_com_accuracy,
         "played_at": datetime.fromtimestamp(end_time, tz=timezone.utc),
         "end_time": end_time,
     }
