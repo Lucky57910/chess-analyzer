@@ -124,11 +124,61 @@ def _phase(board: chess.Board) -> str:
     return "middlegame"
 
 
-def analyse_pgn(pgn: str, depth: int | None = None) -> dict:
-    """Evaluate every position of the game once, then derive per-move stats.
+def _evaluate(eng, board: chess.Board, limit: chess.engine.Limit, token: object) -> dict:
+    """One engine call, folded into the shape the rest of the module expects.
 
-    Position i is evaluated a single time: its eval is the "before" of move i
-    and the "after" of move i-1, so an N-move game costs N+1 engine calls.
+    `token` identifies the game: python-chess sends `ucinewgame` whenever it
+    changes, so the transposition table is shared across the positions of one
+    game - which is what makes the sweep cheap - and cleared between games,
+    which keeps a re-analysis of the same game reproducible.
+    """
+    info = eng.analyse(board, limit, game=token)
+    score = info["score"].white()
+    pv = info.get("pv") or []
+    best = pv[0] if pv else None
+    return {
+        "cp": score.score(mate_score=MATE_CP),
+        "mate": score.mate(),
+        "best_uci": best.uci() if best else None,
+        "best_san": board.san(best) if best else None,
+        "depth": info.get("depth"),
+    }
+
+
+def _deep_targets(positions: list[dict]) -> list[int]:
+    """Positions the shallow pass says are worth a real search.
+
+    Wherever the evaluation moves by more than the threshold, that pair and its
+    neighbours are queued for the deep pass. Targets come out as contiguous
+    runs on purpose: accuracy compares consecutive positions, so both ends of
+    a comparison must have been searched to the same depth or the difference in
+    search alone shows up as a mistake. Only the edge of a run straddles two
+    depths, and an edge sits in a stretch quiet enough not to have been flagged.
+
+    No exemption for opening moves: the shallow pass covers them for almost
+    nothing, and a quiet opening simply never trips the threshold, while a real
+    early blunder still gets its deep search.
+    """
+    window = settings.engine_deep_window
+    flagged: set[int] = set()
+    for i in range(1, len(positions)):
+        drift = abs(_clip(positions[i]["cp"]) - _clip(positions[i - 1]["cp"]))
+        if drift >= settings.engine_deep_threshold_cp:
+            flagged.update(range(max(0, i - window), min(len(positions), i + window + 1)))
+    return sorted(flagged)
+
+
+def analyse_pgn(pgn: str, depth: int | None = None) -> dict:
+    """Evaluate every position of the game, then derive per-move stats.
+
+    Two passes. A cheap one sweeps every position, then the expensive one
+    revisits only the positions where the cheap one saw the evaluation move.
+    Quiet positions are quiet at any depth, so paying full price for them buys
+    nothing; spending that budget on the sharp ones is what makes a depth the
+    free tier could never afford everywhere affordable at all.
+
+    Position i is evaluated once per pass: its eval is the "before" of move i
+    and the "after" of move i-1, so the sweep costs N+1 engine calls.
     """
     depth = depth or settings.engine_depth
     game = chess.pgn.read_game(io.StringIO(pgn))
@@ -140,32 +190,38 @@ def analyse_pgn(pgn: str, depth: int | None = None) -> dict:
     if not moves:
         raise ValueError("PGN contains no moves")
 
-    limit = chess.engine.Limit(depth=depth, time=settings.engine_max_time)
+    scan_limit = chess.engine.Limit(depth=min(settings.engine_scan_depth, depth))
+    deep_limit = chess.engine.Limit(depth=depth, time=settings.engine_max_time)
 
     with _engine_lock:
         eng = _open_engine()
         engine_name = eng.id.get("name", "stockfish")
 
-        positions: list[dict] = []  # eval of each position, White POV
+        fens: list[str] = []
         meta: list[dict] = []
         cursor = chess.Board(start.fen())
-
         for ply in range(len(moves) + 1):
-            info = eng.analyse(cursor, limit)
-            score = info["score"].white()
-            pv = info.get("pv") or []
-            best = pv[0] if pv else None
-            positions.append(
-                {
-                    "cp": score.score(mate_score=MATE_CP),
-                    "mate": score.mate(),
-                    "best_uci": best.uci() if best else None,
-                    "best_san": cursor.san(best) if best else None,
-                }
-            )
+            fens.append(cursor.fen())
             meta.append({"phase": _phase(cursor), "fullmove": cursor.fullmove_number})
             if ply < len(moves):
                 cursor.push(moves[ply])
+
+        token = object()
+        positions = [_evaluate(eng, chess.Board(fen), scan_limit, token) for fen in fens]
+
+        targets = _deep_targets(positions)
+        for index in targets:
+            positions[index] = _evaluate(eng, chess.Board(fens[index]), deep_limit, token)
+
+    # Only the deepened positions are expected to reach `depth`; the rest are
+    # meant to sit at the scan depth.
+    truncated = [positions[i]["depth"] for i in targets if (positions[i]["depth"] or depth) < depth]
+    if truncated and len(truncated) > len(targets) / 2:
+        log.warning(
+            "deep pass hit the time cap on %s/%s positions (reached depth %s, wanted %s); "
+            "raise ENGINE_MAX_TIME or lower ENGINE_DEPTH",
+            len(truncated), len(targets), min(truncated), depth,
+        )
 
     # Second pass: replay the game, pairing consecutive evals.
     result_moves: list[dict] = []
@@ -214,7 +270,12 @@ def analyse_pgn(pgn: str, depth: int | None = None) -> dict:
 
     return {
         "engine_name": engine_name,
+        # The requested depth, not the reached one: staleness is measured
+        # against it, and a time cap that always bites would otherwise queue
+        # the same game forever.
         "engine_depth": depth,
+        "deep_positions": len(targets),
+        "scanned_positions": len(positions),
         "moves": result_moves,
         **aggregate(result_moves),
     }

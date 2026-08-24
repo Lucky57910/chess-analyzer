@@ -17,8 +17,17 @@ class Settings(BaseSettings):
     registration_code: str = ""
 
     stockfish_path: str = "stockfish"
-    engine_depth: int = 14
-    engine_max_time: float = 1.5
+
+    # Two-pass analysis: `engine_scan_depth` sweeps every position cheaply,
+    # `engine_depth` revisits only the ones where the sweep saw the evaluation
+    # move by `engine_deep_threshold_cp`, plus `engine_deep_window` positions
+    # on either side so both ends of a comparison share a depth.
+    engine_depth: int = 18
+    engine_scan_depth: int = 10
+    engine_deep_threshold_cp: int = 150
+    engine_deep_window: int = 1
+    # Safety valve on the deep pass only; the sweep is depth-bound and quick.
+    engine_max_time: float = 3.0
     engine_threads: int = 1
     engine_hash_mb: int = 64
     max_plies: int = 200

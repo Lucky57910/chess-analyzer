@@ -20,7 +20,9 @@ services:
       - key: STOCKFISH_PATH
         value: /usr/games/stockfish
       - key: ENGINE_DEPTH
-        value: "14"
+        value: "18"
+      - key: ENGINE_SCAN_DEPTH
+        value: "10"
       - key: POLL_INTERVAL_SECONDS
         value: "90"
 

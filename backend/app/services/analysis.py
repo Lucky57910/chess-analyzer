@@ -164,7 +164,10 @@ def analyse_game(db: Session, game: Game, *, refresh: bool = False) -> Analysis 
     game.analysis_status = "done"
     game.analysis_error = None
     db.commit()
-    log.info("analysed game %s (%s plies)", game.id, len(moves))
+    log.info(
+        "analysed game %s (%s plies, %s deep of %s positions)",
+        game.id, len(moves), result.get("deep_positions"), result.get("scanned_positions"),
+    )
     return analysis
 
 
