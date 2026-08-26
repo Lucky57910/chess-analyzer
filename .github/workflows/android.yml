@@ -1,0 +1,92 @@
+# Builds the Android app.
+#
+# This exists because the native half cannot be built on the development
+# machine: it has JDK 8 and no Android SDK, and Capacitor 8 needs JDK 21. CI is
+# therefore not a nicety here, it is the only place the Java plugin, the gradle
+# packaging settings and the engine binary are ever proven to fit together.
+#
+# Debug build only, unsigned. Release signing needs a keystore whose identity
+# must stay stable for the life of the app, so it gets its own workflow rather
+# than being bolted on here.
+
+name: android
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+defaults:
+  run:
+    working-directory: frontend
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      # The judgment model is a port of the Python backend and is pinned to a
+      # recorded fixture of it. If that drifts, the APK is not worth building.
+      - name: Test the engine port
+        run: npm test
+
+      - run: npm run lint
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+
+      # 80 MB from the Stockfish release page. Keyed on the fetch script so the
+      # cache is dropped whenever the pinned version or hash changes.
+      - name: Cache Stockfish
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: frontend/android/app/src/main/jniLibs
+          key: stockfish-${{ hashFiles('frontend/scripts/fetch-engine.mjs') }}
+
+      - name: Fetch Stockfish
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        run: npm run engine:fetch
+
+      - name: Build web assets and sync
+        run: npm run android:sync
+
+      - name: Assemble debug APK
+        working-directory: frontend/android
+        run: ./gradlew --no-daemon assembleDebug
+
+      # The engine dominates the APK, and `useLegacyPackaging` means it is also
+      # extracted again at install time. Printing both numbers keeps that cost
+      # visible instead of surprising someone on a phone.
+      - name: Report size
+        working-directory: frontend/android
+        run: |
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          ls -lh "$apk"
+          unzip -l "$apk" | grep -E 'libstockfish|Archive|----' || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: chess-analyzer-debug
+          path: frontend/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

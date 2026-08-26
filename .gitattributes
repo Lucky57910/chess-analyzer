@@ -4,3 +4,12 @@
 *.sh text eol=lf
 Dockerfile text eol=lf
 deploy/* text eol=lf
+
+# `gradlew` is a shell script with no extension, so the *.sh rule above
+# misses it. CI runs it on Linux; checked out with CRLF it dies as
+# "bad interpreter" - the exact failure that comment warns about.
+frontend/android/gradlew text eol=lf
+frontend/android/gradle/wrapper/*.properties text eol=lf
+
+# Never let end-of-line normalisation near a jar.
+*.jar binary

@@ -1,0 +1,11 @@
+{
+  "appId": "io.github.lucky57910.chessanalyzer",
+  "appName": "Chess Analyzer",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

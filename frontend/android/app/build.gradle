@@ -1,0 +1,97 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace = "io.github.lucky57910.chessanalyzer"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "io.github.lucky57910.chessanalyzer"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            // The engine ships as a 64-bit ARM binary and there is no other
+            // build of it here. Packaging a second ABI would produce an app
+            // that installs and then cannot analyse anything.
+            abiFilters "arm64-v8a"
+        }
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // The one setting this whole approach depends on.
+            //
+            // Modern Android keeps native libraries page-aligned and compressed
+            // inside the APK and maps them straight from there. That works for
+            // libraries the linker loads; it does not work for a file we intend
+            // to *execute*, because nativeLibraryDir then names a path that is
+            // not a real file on disk and exec fails with ENOENT.
+            //
+            // Legacy packaging extracts the library at install time into a real
+            // directory with the execute bit set, which is the only place an app
+            // is allowed to run a binary from since API 29.
+            //
+            // Cost: the engine is stored twice on the device, once compressed in
+            // the APK and once extracted. ~160 MB installed for an 80 MB engine.
+            useLegacyPackaging = true
+        }
+    }
+}
+
+// The engine is 80 MB, over GitHub's 100 MB file limit once you account for
+// history, so it is fetched rather than committed. Failing here with an
+// instruction beats failing on the phone with ENOENT.
+tasks.configureEach { task ->
+    if (task.name == "preBuild") {
+        task.doFirst {
+            def engine = file("src/main/jniLibs/arm64-v8a/libstockfish.so")
+            if (!engine.exists()) {
+                throw new GradleException(
+                    "Stockfish binary missing at ${engine}.\n" +
+                    "Run `npm run engine:fetch` in the frontend directory first."
+                )
+            }
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
