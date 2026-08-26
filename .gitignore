@@ -15,6 +15,7 @@ dist/
 # Secrets
 .env
 .env.local
+deploy/.env
 
 # Claude Code local settings
 .claude/settings.local.json
