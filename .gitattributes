@@ -1,0 +1,6 @@
+# These files are consumed by Linux on the server, whatever the checkout host
+# converts them to locally. A shell script that arrives with CRLF fails as
+# "bad interpreter", which is a confusing way to lose an evening.
+*.sh text eol=lf
+Dockerfile text eol=lf
+deploy/* text eol=lf
