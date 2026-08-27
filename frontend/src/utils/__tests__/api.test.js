@@ -1,0 +1,289 @@
+/**
+ * The facade the pages call, over a real database.
+ *
+ * The pages were written against a FastAPI backend and were not rewritten. So
+ * the thing that can break here is not logic, it is shape: GameList reads
+ * `game.accuracy` and `game.blunders`, which the server flattened out of the
+ * analysis before sending. If this facade returns `accuracy_white` instead,
+ * every row renders with a blank accuracy and nothing throws.
+ *
+ * These tests assert the field names the components actually read, taken from
+ * the components rather than from memory.
+ */
+
+import { DatabaseSync } from "node:sqlite";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+import golden from "../../data/__fixtures__/golden-data.json";
+import { normalizeGame } from "../../data/chessCom.js";
+import { createRepository, migrate, nodeDriver } from "../../data/db.js";
+import { createGameStore } from "../../data/games.js";
+import { createSync, SETTING_USERNAME } from "../../data/sync.js";
+import { ApiError, createApi } from "../api.js";
+
+const ME = "maxime";
+const ROWS = golden.normalize.map(({ raw }) => normalizeGame(raw, ME)).filter(Boolean);
+
+/** Exactly what GameList and StatsSummary read off their props. */
+const GAME_LIST_FIELDS = [
+  "id",
+  "accuracy",
+  "analysis_status",
+  "blunders",
+  "chess_com_accuracy",
+  "mistakes",
+  "opening",
+  "opponent_rating",
+  "opponent_username",
+  "played_at",
+  "result",
+  "time_class",
+  "user_color",
+];
+
+const STATS_SUMMARY_FIELDS = [
+  "analysed",
+  "avg_accuracy",
+  "avg_acpl",
+  "blunders_per_game",
+  "draws",
+  "games",
+  "losses",
+  "weakest_phase",
+  "win_rate",
+  "wins",
+];
+
+function analysisResult(overrides = {}) {
+  return {
+    engine_name: "Stockfish 17.1",
+    engine_depth: 14,
+    moves: [
+      { ply: 1, color: "white", san: "e4", cp_loss: 0, judgment: null, phase: "opening", move_number: 1 },
+      { ply: 2, color: "black", san: "e5", cp_loss: 320, judgment: "blunder", phase: "opening", move_number: 1 },
+    ],
+    accuracy_white: 88.1,
+    accuracy_black: 61.4,
+    acpl_white: 12.0,
+    acpl_black: 230.0,
+    judgment_counts: {
+      white: { inaccuracy: 1, mistake: 2, blunder: 3 },
+      black: { inaccuracy: 4, mistake: 5, blunder: 6 },
+    },
+    phase_stats: {
+      white: { opening: { moves: 2, acpl: 12.0, accuracy: 88.1 } },
+      black: { opening: { moves: 2, acpl: 230.0, accuracy: 61.4 } },
+    },
+    ...overrides,
+  };
+}
+
+async function fixture() {
+  const database = new DatabaseSync(":memory:");
+  database.exec("PRAGMA foreign_keys = ON");
+  const driver = nodeDriver(database);
+  await migrate(driver);
+  const repo = createRepository(driver);
+  const store = createGameStore(repo);
+  await repo.setSetting(SETTING_USERNAME, ME);
+  await store.upsertMany(ROWS);
+
+  const client = {
+    fetchCurrentMonth: async () => golden.normalize.map((c) => c.raw),
+    fetchRecentMonths: async () => golden.normalize.map((c) => c.raw),
+  };
+  const sync = createSync({ repo, store, client, evaluate: async () => ({}) });
+  const engine = { info: async () => ({ available: true, name: "Stockfish 17.1", path: "/x" }) };
+  const api = createApi({ repo, store, sync, engine });
+  return { repo, store, sync, api, engine };
+}
+
+describe("games", () => {
+  let ctx;
+  beforeEach(async () => {
+    ctx = await fixture();
+  });
+
+  it("returns every field GameList reads", async () => {
+    const [game] = await ctx.api.games({ limit: 1 });
+    for (const field of GAME_LIST_FIELDS) {
+      expect(game, `missing ${field}`).toHaveProperty(field);
+    }
+  });
+
+  it("flattens the analysis onto the user's side", async () => {
+    const [first] = await ctx.api.games({ limit: 1 });
+    await ctx.store.saveAnalysis(first.id, analysisResult());
+
+    const [game] = await ctx.api.games({ limit: 1 });
+    const white = game.user_color === "white";
+    expect(game.accuracy).toBe(white ? 88.1 : 61.4);
+    expect(game.acpl).toBe(white ? 12.0 : 230.0);
+    expect(game.blunders).toBe(white ? 3 : 6);
+    expect(game.mistakes).toBe(white ? 2 : 5);
+    expect(game.inaccuracies).toBe(white ? 1 : 4);
+  });
+
+  it("does not leak the per-colour columns the pages never read", async () => {
+    const [first] = await ctx.api.games({ limit: 1 });
+    await ctx.store.saveAnalysis(first.id, analysisResult());
+    const [game] = await ctx.api.games({ limit: 1 });
+    expect(game).not.toHaveProperty("accuracy_white");
+    expect(game).not.toHaveProperty("judgment_counts");
+  });
+
+  it("leaves accuracy null on a game with no analysis", async () => {
+    const [game] = await ctx.api.games({ limit: 1 });
+    expect(game.accuracy).toBeNull();
+    expect(game.blunders).toBeNull();
+    expect(game.analysis_status).toBe("pending");
+  });
+
+  it("passes filters through", async () => {
+    const blacks = await ctx.api.games({ limit: 100, color: "black" });
+    expect(blacks.length).toBeGreaterThan(0);
+    expect(blacks.every((g) => g.user_color === "black")).toBe(true);
+
+    const draws = await ctx.api.games({ limit: 100, result: "draw" });
+    expect(draws.every((g) => g.result === "draw")).toBe(true);
+  });
+
+  it("includes the PGN on a single game but not in the list", async () => {
+    const [listed] = await ctx.api.games({ limit: 1 });
+    const detail = await ctx.api.game(listed.id);
+    expect(detail.pgn).toBeTruthy();
+    expect(detail.accuracy).toBeDefined();
+  });
+
+  it("raises a 404 the pages can recognise", async () => {
+    await expect(ctx.api.game(9999)).rejects.toBeInstanceOf(ApiError);
+    await expect(ctx.api.game(9999)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("explains which state a missing analysis is in", async () => {
+    const [game] = await ctx.api.games({ limit: 1 });
+    await expect(ctx.api.analysis(game.id)).rejects.toThrow(/pending/);
+  });
+});
+
+describe("stats", () => {
+  let ctx;
+  beforeEach(async () => {
+    ctx = await fixture();
+    const games = await ctx.api.games({ limit: 100 });
+    for (const game of games.slice(0, 5)) {
+      await ctx.store.saveAnalysis(game.id, analysisResult());
+    }
+  });
+
+  it("returns every field StatsSummary reads", async () => {
+    const stats = await ctx.api.stats();
+    for (const field of STATS_SUMMARY_FIELDS) {
+      expect(stats, `missing ${field}`).toHaveProperty(field);
+    }
+    expect(stats.analysed).toBe(5);
+  });
+
+  // Measured from the newest game rather than from now, so opening the app
+  // after a month away still shows a window with games in it instead of an
+  // empty dashboard.
+  it("windows by days against the newest game, not today", async () => {
+    const newest = ROWS[0].end_time;
+    const old = {
+      ...ROWS[0],
+      chess_com_game_id: "way-older",
+      end_time: newest - 40 * 86_400,
+      played_at: new Date((newest - 40 * 86_400) * 1000).toISOString(),
+    };
+    await ctx.store.upsertMany([old]);
+
+    const all = await ctx.api.stats();
+    const window = await ctx.api.stats(7);
+    expect(all.games).toBe(ROWS.length + 1);
+    expect(window.games).toBe(ROWS.length);
+  });
+
+  it("serves trends and mistakes in the shapes the charts expect", async () => {
+    const trends = await ctx.api.trends("week", 5);
+    expect(Array.isArray(trends)).toBe(true);
+    for (const point of trends) {
+      expect(point).toHaveProperty("period");
+      expect(point).toHaveProperty("win_rate");
+    }
+    const mistakes = await ctx.api.mistakes();
+    expect(mistakes).toHaveProperty("worst_moves");
+    expect(mistakes).toHaveProperty("by_move_number");
+  });
+});
+
+describe("sync and settings", () => {
+  let ctx;
+  beforeEach(async () => {
+    ctx = await fixture();
+  });
+
+  it("reports the queue and the total", async () => {
+    const status = await ctx.api.syncStatus();
+    expect(status.total).toBe(ROWS.length);
+    expect(status.pending).toBe(ROWS.length);
+    expect(status.done).toBe(0);
+  });
+
+  it("reports nothing new on a second import of the same archive", async () => {
+    const result = await ctx.api.sync(1);
+    expect(result.imported).toBe(0);
+    expect(result.pending_analysis).toBe(ROWS.length);
+  });
+
+  it("stores the Chess.com username, trimmed", async () => {
+    const saved = await ctx.api.updateSettings({ chess_com_username: "  Someone  " });
+    expect(saved.chess_com_username).toBe("Someone");
+    expect((await ctx.api.settings()).chess_com_username).toBe("Someone");
+  });
+
+  it("puts a game back in the queue on refresh", async () => {
+    const [game] = await ctx.api.games({ limit: 1 });
+    await ctx.store.saveAnalysis(game.id, analysisResult());
+    expect((await ctx.store.get(game.id)).analysis_status).toBe("done");
+
+    await ctx.api.refresh(game.id);
+    expect((await ctx.store.get(game.id)).analysis_status).toBe("pending");
+  });
+});
+
+describe("health", () => {
+  it("reports the engine when it is there", async () => {
+    const ctx = await fixture();
+    const health = await ctx.api.health();
+    expect(health.engine.available).toBe(true);
+    expect(health.engine.name).toBe("Stockfish 17.1");
+  });
+
+  // The Settings screen shows this string. If the plugin throws instead of
+  // answering, the screen must say why rather than crash on a missing field.
+  it("survives a plugin that throws", async () => {
+    const ctx = await fixture();
+    const api = createApi({
+      ...ctx,
+      engine: {
+        info: vi.fn(async () => {
+          throw new Error("Stockfish binary missing or not executable at /x");
+        }),
+      },
+    });
+    const health = await api.health();
+    expect(health.engine.available).toBe(false);
+    expect(health.engine.error).toMatch(/binary missing/);
+  });
+
+  it("reports an unavailable engine without inventing a name", async () => {
+    const ctx = await fixture();
+    const api = createApi({
+      ...ctx,
+      engine: { info: async () => ({ available: false, path: "/nope" }) },
+    });
+    const health = await api.health();
+    expect(health.engine.available).toBe(false);
+    expect(health.engine.error).toMatch(/\/nope/);
+  });
+});

@@ -1,10 +1,15 @@
 import { useEffect, useState } from 'react'
-import { useAuth } from '../hooks/useAuth'
+import { useQueue } from '../hooks/useQueue'
+import { useSettings } from '../hooks/useSettings'
 import { api } from '../utils/api'
 
 export default function Settings() {
-  const { user, refreshUser } = useAuth()
-  const [name, setName] = useState(user?.chess_com_username || '')
+  const { settings, username, update } = useSettings()
+  const { running, status, start, stop, refreshStatus } = useQueue()
+  // Shell holds the page back until the settings have loaded, so the stored
+  // username is already here on the first render and needs no effect to
+  // arrive later.
+  const [name, setName] = useState(username)
   const [months, setMonths] = useState(3)
   const [health, setHealth] = useState(null)
   const [message, setMessage] = useState(null)
@@ -21,9 +26,8 @@ export default function Settings() {
     setError(null)
     setMessage(null)
     try {
-      await api.updateMe({ chess_com_username: name.trim() })
-      await refreshUser()
-      setMessage('Compte Chess.com enregistré. Import en cours en arrière-plan.')
+      await update({ chess_com_username: name })
+      setMessage('Compte Chess.com enregistré. Lancez un import pour récupérer vos parties.')
     } catch (err) {
       setError(err.message)
     } finally {
@@ -37,13 +41,20 @@ export default function Settings() {
     setMessage(null)
     try {
       const res = await api.sync(months)
-      setMessage(`${res.imported} partie(s) importée(s), ${res.pending_analysis} en file d'analyse.`)
+      await refreshStatus()
+      setMessage(
+        `${res.imported} partie(s) importée(s)` +
+          (res.updated ? `, ${res.updated} mise(s) à jour` : '') +
+          `, ${res.pending_analysis} en file d’analyse.`,
+      )
     } catch (err) {
       setError(err.message)
     } finally {
       setBusy(false)
     }
   }
+
+  const queued = (status?.pending ?? 0) + (status?.running ?? 0)
 
   return (
     <div className="flex max-w-2xl flex-col gap-6">
@@ -69,6 +80,9 @@ export default function Settings() {
         <p className="mt-2 text-xs text-ink-500">
           L’API publique de Chess.com ne demande aucun mot de passe : seul le pseudo est
           nécessaire pour lire vos parties.
+          {settings?.last_synced_at && (
+            <> Dernier import : {new Date(settings.last_synced_at).toLocaleString('fr-FR')}.</>
+          )}
         </p>
       </section>
 
@@ -89,15 +103,40 @@ export default function Settings() {
           <button
             type="button"
             onClick={importHistory}
-            disabled={busy || !user?.chess_com_username}
+            disabled={busy || !username}
             className="rounded-md border border-ink-700 px-3 py-2 text-sm text-ink-300 hover:bg-ink-800 disabled:opacity-50"
           >
             {busy ? 'Import…' : 'Importer'}
           </button>
         </div>
         <p className="mt-2 text-xs text-ink-500">
-          Les nouvelles parties sont détectées automatiquement toutes les{' '}
-          {health?.poll_interval_seconds ?? 15} s, et un rattrapage est lancé à chaque connexion.
+          L’import ne récupère que les parties ; l’analyse se lance séparément.
+        </p>
+      </section>
+
+      <section className="rounded-lg border border-ink-800 bg-ink-900 p-4">
+        <h2 className="text-sm font-medium text-ink-300">File d’analyse</h2>
+        <p className="mt-2 text-sm text-ink-300">
+          {status
+            ? `${status.done} analysées · ${queued} en attente${
+                status.stale ? ` · ${status.stale} à réanalyser plus profondément` : ''
+              }${status.error ? ` · ${status.error} en échec` : ''}`
+            : '—'}
+        </p>
+        <button
+          type="button"
+          onClick={running ? stop : start}
+          disabled={!running && queued === 0 && !status?.stale}
+          className="mt-3 rounded-md bg-accent px-3 py-2 text-sm font-medium text-ink-950 disabled:opacity-50"
+        >
+          {running ? 'Arrêter l’analyse' : 'Lancer l’analyse'}
+        </button>
+        {/* Worth saying once, plainly: this is why the app has no background
+            sync and why the phone gets warm. */}
+        <p className="mt-2 text-xs text-ink-500">
+          L’analyse tourne uniquement quand l’application est ouverte. Android n’autorise pas un
+          calcul aussi long en arrière-plan, et un téléphone qui analyse des parties dans une
+          poche se viderait en quelques heures.
         </p>
       </section>
 
@@ -108,6 +147,7 @@ export default function Settings() {
             {health.engine.available ? (
               <span className="text-good">
                 {health.engine.name} · profondeur {health.engine_depth}
+                {health.cpu_abi && <span className="text-ink-500"> · {health.cpu_abi}</span>}
               </span>
             ) : (
               <span className="text-blunder">
@@ -116,7 +156,7 @@ export default function Settings() {
             )}
           </p>
         ) : (
-          <p className="mt-2 text-sm text-ink-500">Backend injoignable.</p>
+          <p className="mt-2 text-sm text-ink-500">État du moteur inconnu.</p>
         )}
       </section>
 

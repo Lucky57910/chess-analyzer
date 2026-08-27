@@ -104,8 +104,12 @@ export function createGameStore(repo) {
       }
       const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
 
+      // The judgment counts come along so the list can show "2 blunders"
+      // without a query per row. That is the whole reason the server flattened
+      // them onto the game payload too.
       const rows = await repo.all(
-        `SELECT g.*, a.accuracy_white, a.accuracy_black, a.acpl_white, a.acpl_black
+        `SELECT g.*, a.accuracy_white, a.accuracy_black, a.acpl_white, a.acpl_black,
+                a.judgment_counts, a.engine_depth
            FROM games g LEFT JOIN analyses a ON a.game_id = g.id
           ${where}
           ORDER BY g.end_time DESC

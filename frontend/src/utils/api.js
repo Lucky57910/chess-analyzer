@@ -1,124 +1,220 @@
-const BASE = import.meta.env.VITE_API_URL || ''
-const TOKEN_KEY = 'chess-analyzer-token'
+/**
+ * What the pages talk to. Same surface as the HTTP client it replaces.
+ *
+ * The screens used to call a FastAPI backend; they now call SQLite on the
+ * phone. Keeping the method names and the payload shapes identical is what
+ * makes that a change to one file instead of six - `api.games()` still returns
+ * a flat list with the user's accuracy already on each row, because that is
+ * what GameList reads.
+ *
+ * Gone with the server: `login`, `register`, `me`, tokens, and the wake-up
+ * retry loop. There is nothing to wake and nobody to authenticate against.
+ *
+ * `createApi` takes its dependencies so the whole facade can be exercised over
+ * a real database in tests; `api` is the lazily-wired singleton the app uses.
+ */
 
-export function getToken() {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
-export function setToken(token) {
-  if (token) localStorage.setItem(TOKEN_KEY, token)
-  else localStorage.removeItem(TOKEN_KEY)
-}
+import { DEFAULT_SETTINGS } from "../engine/analyze.js";
+import { SETTING_LAST_SYNCED, SETTING_USERNAME } from "../data/sync.js";
 
 export class ApiError extends Error {
   constructor(status, message) {
-    super(message)
-    this.status = status
+    super(message);
+    this.status = status;
   }
 }
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+/** Flatten the user's side of an analysis onto a game row, as the server did. */
+function flatten(row) {
+  const white = row.user_color === "white";
+  const counts = (row.judgment_counts ?? {})[row.user_color] ?? {};
+  // The per-colour columns are peeled off rather than passed through: leaving
+  // both spellings on the row invites a component reading White's accuracy for
+  // a game the user played as Black, which looks entirely plausible on screen.
+  const { accuracy_white, accuracy_black, acpl_white, acpl_black, ...rest } = row;
+  delete rest.judgment_counts;
 
-// The API sleeps after ~15 min idle on the free tier. While it boots, fetch
-// rejects outright (the platform's holding response carries no CORS headers),
-// so we retry for longer than a cold start takes. Measured at 86 s on the free
-// instance, so the old 60 s budget gave up while the server was still coming
-// back and told the user it was unreachable, which was simply untrue.
-const WAKE_UP_BUDGET_MS = 150000
-
-// A set, not a single slot: a second subscriber must not silently evict the
-// first, and unsubscribing must only remove its own listener.
-const wakingListeners = new Set()
-
-/** Subscribe to "the server is asleep and we are waiting for it". */
-export function onWakingUp(listener) {
-  wakingListeners.add(listener)
-  return () => wakingListeners.delete(listener)
+  return {
+    ...rest,
+    accuracy: (white ? accuracy_white : accuracy_black) ?? null,
+    acpl: (white ? acpl_white : acpl_black) ?? null,
+    inaccuracies: counts.inaccuracy ?? null,
+    mistakes: counts.mistake ?? null,
+    blunders: counts.blunder ?? null,
+  };
 }
 
-function announceWaking(waking) {
-  for (const listener of wakingListeners) listener(waking)
-}
-
-async function fetchWithWakeUp(url, init) {
-  const deadline = Date.now() + WAKE_UP_BUDGET_MS
-  let announced = false
-  try {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await fetch(url, init)
-      } catch {
-        if (Date.now() >= deadline) {
-          throw new ApiError(
-            0,
-            'Le serveur ne répond pas après deux minutes. Réessayez dans un instant.',
-          )
-        }
-        if (!announced) {
-          announced = true
-          announceWaking(true)
-        }
-        await sleep(Math.min(2000 * (attempt + 1), 8000))
-      }
+export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTINGS }) {
+  const loadAllGames = async () => {
+    const { games } = await store.list({ limit: Number.MAX_SAFE_INTEGER });
+    const withAnalysis = [];
+    for (const game of games) {
+      withAnalysis.push({ ...game, analysis: await store.getAnalysis(game.id) });
     }
-  } finally {
-    if (announced) announceWaking(false)
-  }
+    return withAnalysis;
+  };
+
+  return {
+    async settings() {
+      return {
+        chess_com_username: await repo.getSetting(SETTING_USERNAME, ""),
+        last_synced_at: await repo.getSetting(SETTING_LAST_SYNCED, null),
+        engine_depth: settings.engine_depth,
+      };
+    },
+
+    async updateSettings(patch) {
+      if ("chess_com_username" in patch) {
+        await repo.setSetting(SETTING_USERNAME, patch.chess_com_username.trim());
+      }
+      return this.settings();
+    },
+
+    async games(params = {}) {
+      const { games } = await store.list({
+        limit: params.limit ?? 20,
+        offset: params.offset ?? 0,
+        result: params.result,
+        timeClass: params.time_class,
+        color: params.color,
+      });
+      return games.map(flatten);
+    },
+
+    async game(id) {
+      const row = await store.get(id);
+      if (!row) throw new ApiError(404, "Partie introuvable");
+      const analysis = await store.getAnalysis(id);
+      return flatten({
+        ...row,
+        accuracy_white: analysis?.accuracy_white,
+        accuracy_black: analysis?.accuracy_black,
+        acpl_white: analysis?.acpl_white,
+        acpl_black: analysis?.acpl_black,
+        judgment_counts: analysis?.judgment_counts,
+      });
+    },
+
+    async analysis(id) {
+      const row = await store.getAnalysis(id);
+      if (!row) {
+        const game = await store.get(id);
+        throw new ApiError(404, `Pas encore d'analyse (état : ${game?.analysis_status ?? "?"})`);
+      }
+      return row;
+    },
+
+    /** Put a game back at the front of the queue. */
+    async refresh(id) {
+      await store.requeue(id);
+      return { status: "pending" };
+    },
+
+    async sync(months = 1) {
+      const result = await sync.importGames({ months });
+      const status = await sync.status();
+      return {
+        imported: result.inserted,
+        updated: result.updated,
+        skipped: result.skipped,
+        pending_analysis: status.pending,
+      };
+    },
+
+    async syncStatus() {
+      const status = await sync.status();
+      return { ...status, total: await store.count() };
+    },
+
+    stats: async (days) => {
+      const { computeStats } = await import("../data/stats.js");
+      const games = await loadAllGames();
+      return computeStats(withinDays(games, days));
+    },
+
+    trends: async (period = "week", limit = 12) => {
+      const { computeTrends } = await import("../data/stats.js");
+      return computeTrends(await loadAllGames(), { period, limit });
+    },
+
+    mistakes: async () => {
+      const { computeMistakes } = await import("../data/stats.js");
+      return computeMistakes(await loadAllGames());
+    },
+
+    /** Engine status, from the plugin rather than a server. */
+    async health() {
+      try {
+        const info = await engine.info();
+        return {
+          engine: info.available
+            ? { available: true, name: info.name ?? "Stockfish", path: info.path }
+            : { available: false, error: info.error ?? `Binaire absent (${info.path})` },
+          engine_depth: settings.engine_depth,
+          cpu_abi: info.cpuAbi,
+        };
+      } catch (error) {
+        return {
+          engine: { available: false, error: String(error.message ?? error) },
+          engine_depth: settings.engine_depth,
+        };
+      }
+    },
+  };
 }
 
-async function request(path, { method = 'GET', body, auth = true } = {}) {
-  const headers = {}
-  if (body !== undefined) headers['Content-Type'] = 'application/json'
-  const token = getToken()
-  if (auth && token) headers.Authorization = `Bearer ${token}`
-
-  const res = await fetchWithWakeUp(`${BASE}${path}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  })
-
-  if (res.status === 204) return null
-  const text = await res.text()
-  const data = text ? JSON.parse(text) : null
-
-  if (!res.ok) {
-    if (res.status === 401 && auth) setToken(null)
-    const detail = data?.detail
-    const message =
-      typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map((d) => d.msg).join(', ')
-          : `Request failed (${res.status})`
-    throw new ApiError(res.status, message)
-  }
-  return data
+/** The stats screen offers a window; the server did this filtering in SQL. */
+function withinDays(games, days) {
+  if (!days) return games;
+  const newest = games.reduce((max, g) => Math.max(max, g.end_time ?? 0), 0);
+  const cutoff = newest - days * 86_400;
+  return games.filter((g) => (g.end_time ?? 0) >= cutoff);
 }
 
-export const api = {
-  register: (payload) => request('/auth/register', { method: 'POST', body: payload, auth: false }),
-  login: (payload) => request('/auth/login', { method: 'POST', body: payload, auth: false }),
-  me: () => request('/auth/me'),
-  updateMe: (payload) => request('/auth/me', { method: 'PATCH', body: payload }),
+let pending = null;
 
-  games: (params = {}) => {
-    const qs = new URLSearchParams(
-      Object.entries(params).filter(([, v]) => v !== undefined && v !== null && v !== ''),
-    )
-    return request(`/api/games?${qs}`)
+/**
+ * The app's single wired instance.
+ *
+ * Created once, on first use, because opening the database and starting a
+ * chess engine are not things to do twice. Everything native lives behind this
+ * import so the module graph above it stays testable.
+ */
+export function getApi() {
+  if (!pending) {
+    pending = (async () => {
+      const [{ createApp }, { createSync }] = await Promise.all([
+        import("../data/capacitor.js"),
+        import("../data/sync.js"),
+      ]);
+      const app = await createApp({ settings: DEFAULT_SETTINGS });
+      const sync = createSync({
+        repo: app.repo,
+        store: app.store,
+        client: app.client,
+        evaluate: app.evaluate,
+        settings: DEFAULT_SETTINGS,
+      });
+      return { api: createApi({ ...app, sync, settings: DEFAULT_SETTINGS }), app, sync };
+    })();
+  }
+  return pending;
+}
+
+/**
+ * Proxy so pages can keep `import { api }` and call methods directly.
+ *
+ * Every call resolves the singleton first, which means no page has to know
+ * that its data source needs opening.
+ */
+export const api = new Proxy(
+  {},
+  {
+    get(_target, method) {
+      return async (...args) => {
+        const { api: real } = await getApi();
+        return real[method](...args);
+      };
+    },
   },
-  game: (id) => request(`/api/games/${id}`),
-  analysis: (id) => request(`/api/games/${id}/analysis`),
-  refresh: (id) => request(`/api/games/${id}/refresh`, { method: 'POST' }),
-
-  sync: (months = 1) => request(`/api/sync?months=${months}`, { method: 'POST' }),
-  syncStatus: () => request('/api/sync/status'),
-
-  stats: (days) => request(`/api/stats${days ? `?days=${days}` : ''}`),
-  trends: (period = 'week', limit = 12) =>
-    request(`/api/stats/trends?period=${period}&limit=${limit}`),
-  mistakes: () => request('/api/stats/mistakes'),
-
-  health: () => request('/api/health', { auth: false }),
-}
+);

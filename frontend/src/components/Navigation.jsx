@@ -1,5 +1,6 @@
-import { NavLink, useNavigate } from 'react-router-dom'
-import { useAuth } from '../hooks/useAuth'
+import { NavLink } from 'react-router-dom'
+import { useQueue } from '../hooks/useQueue'
+import { useSettings } from '../hooks/useSettings'
 
 const linkClass = ({ isActive }) =>
   `rounded-md px-3 py-1.5 text-sm transition-colors ${
@@ -7,8 +8,10 @@ const linkClass = ({ isActive }) =>
   }`
 
 export default function Navigation() {
-  const { user, logout } = useAuth()
-  const navigate = useNavigate()
+  const { username } = useSettings()
+  const { running, status } = useQueue()
+
+  const queued = (status?.pending ?? 0) + (status?.running ?? 0)
 
   return (
     <header className="border-b border-ink-800 bg-ink-900">
@@ -27,22 +30,18 @@ export default function Navigation() {
         </NavLink>
 
         <div className="ml-auto flex items-center gap-3 text-sm text-ink-300">
-          <span className="hidden sm:inline">
-            {user?.username}
-            {user?.chess_com_username && (
-              <span className="text-ink-500"> · {user.chess_com_username}</span>
-            )}
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              logout()
-              navigate('/login')
-            }}
-            className="rounded-md border border-ink-700 px-3 py-1.5 hover:bg-ink-800"
-          >
-            Déconnexion
-          </button>
+          {/* The queue only runs while the app is open, so its state belongs
+              where it is visible from every screen. */}
+          {running && (
+            <span className="flex items-center gap-1.5 text-accent">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent" />
+              Analyse…
+            </span>
+          )}
+          {!running && queued > 0 && (
+            <span className="text-ink-500">{queued} en attente</span>
+          )}
+          {username && <span className="hidden text-ink-500 sm:inline">{username}</span>}
         </div>
       </nav>
     </header>

@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import GameList from '../components/GameList'
 import StatsSummary from '../components/StatsSummary'
-import { useAuth } from '../hooks/useAuth'
+import { useQueue } from '../hooks/useQueue'
+import { useSettings } from '../hooks/useSettings'
 import { api } from '../utils/api'
 
 const FILTERS = [
@@ -13,24 +14,22 @@ const FILTERS = [
 ]
 
 export default function Dashboard() {
-  const { user } = useAuth()
+  const { username } = useSettings()
+  const { running, processed, progress, status, start, stop, refreshStatus } = useQueue()
   const [games, setGames] = useState([])
   const [stats, setStats] = useState(null)
-  const [status, setStatus] = useState(null)
   const [filter, setFilter] = useState(0)
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState(null)
 
   const load = useCallback(async () => {
     try {
-      const [g, s, st] = await Promise.all([
+      const [g, s] = await Promise.all([
         api.games({ limit: 25, ...FILTERS[filter].value }),
         api.stats(),
-        api.syncStatus(),
       ])
       setGames(g)
       setStats(s)
-      setStatus(st)
       setError(null)
     } catch (err) {
       setError(err.message)
@@ -41,18 +40,19 @@ export default function Dashboard() {
     load()
   }, [load])
 
-  // Keep the list live while the worker chews through the analysis queue.
+  // Reload as the queue finishes games. `processed` changes once per game, so
+  // this follows the work instead of polling a clock the way the server
+  // version had to.
   useEffect(() => {
-    if (!status?.pending && !status?.running) return undefined
-    const id = setInterval(load, 5000)
-    return () => clearInterval(id)
-  }, [status?.pending, status?.running, load])
+    if (processed > 0) load()
+  }, [processed, load])
 
   async function onSync() {
     setSyncing(true)
     setError(null)
     try {
       await api.sync(1)
+      await refreshStatus()
       await load()
     } catch (err) {
       setError(err.message)
@@ -61,7 +61,7 @@ export default function Dashboard() {
     }
   }
 
-  if (!user?.chess_com_username) {
+  if (!username) {
     return (
       <div className="rounded-lg border border-ink-800 bg-ink-900 p-6">
         <h2 className="text-lg font-medium">Reliez votre compte Chess.com</h2>
@@ -78,6 +78,8 @@ export default function Dashboard() {
     )
   }
 
+  const queued = (status?.pending ?? 0) + (status?.running ?? 0)
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -86,21 +88,50 @@ export default function Dashboard() {
           {status && (
             <span>
               {status.done} analysées
-              {status.pending + status.running > 0 &&
-                ` · ${status.pending + status.running} en file`}
+              {queued > 0 && ` · ${queued} en file`}
               {status.error > 0 && ` · ${status.error} en échec`}
             </span>
           )}
           <button
             type="button"
             onClick={onSync}
-            disabled={syncing}
+            disabled={syncing || running}
             className="rounded-md border border-ink-700 px-3 py-1.5 text-ink-300 hover:bg-ink-800 disabled:opacity-50"
           >
             {syncing ? 'Import…' : 'Synchroniser'}
           </button>
         </div>
       </div>
+
+      {/* The queue is the user's decision now: it costs battery and it only
+          runs while they are looking at it, so it does not start itself. */}
+      {(queued > 0 || running) && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-ink-800 bg-ink-900 px-4 py-3">
+          <div className="flex-1 text-sm">
+            {running ? (
+              <>
+                <span className="text-ink-100">Analyse en cours</span>
+                <span className="text-ink-500">
+                  {' · '}
+                  {processed} partie(s) terminée(s)
+                  {progress && ` · position ${progress.done}/${progress.total}`}
+                </span>
+              </>
+            ) : (
+              <span className="text-ink-300">
+                {queued} partie(s) en attente d’analyse.
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={running ? stop : start}
+            className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-ink-950"
+          >
+            {running ? 'Arrêter' : 'Analyser'}
+          </button>
+        </div>
+      )}
 
       {error && (
         <p className="rounded-md border border-blunder/40 bg-blunder/10 px-3 py-2 text-sm text-blunder">
