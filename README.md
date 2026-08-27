@@ -1,180 +1,124 @@
 # Chess Analyzer
 
-Imports your Chess.com games, runs Stockfish over every position, and shows you
-where the games were actually decided: evaluation curve, per-move judgments,
-accuracy, and the phase you keep losing points in.
+An Android app that imports your Chess.com games, runs Stockfish over every
+position, and shows where the games were actually decided: evaluation curve,
+per-move judgments, accuracy, and the phase you keep losing points in.
 
-Built for two accounts (username + password), deployable on Render free tier +
-Vercel, no paid dependency.
+Everything runs on the phone. The engine, the database and the analysis are all
+local; the only network call is to Chess.com's public archive. There is no
+account, no server, and no hosting bill.
 
----
+## Install
 
-## Two things the original plan assumed that do not exist
+Download the APK from the [latest release](../../releases/latest), or point
+[Obtainium](https://github.com/ImranR98/Obtainium) at this repository to get
+updates automatically.
 
-**Chess.com has no OAuth.** The Published-Data API
-(`https://api.chess.com/pub/...`) is read-only, public, and unauthenticated.
-There is no app registration, no client id, no token. Linking an account is
-therefore just "type your Chess.com username" — which is why this app has its
-own username/password login on top (the site is public, the data should not be).
+arm64-v8a only, Android 7+. The APK is ~70 MB because Stockfish is inside it,
+and lands at roughly double that installed — see the packaging note below.
 
-**Lichess cannot analyse an arbitrary PGN.** There is no
-`POST /api/cloud/analysis`. The only cloud endpoint is
-`GET /api/cloud-eval?fen=`, which returns evals *only* for positions already in
-Lichess's cache — most middlegame positions from your games return 404. An eval
-graph built on it would be mostly holes.
+**Export a backup before reinstalling.** Réglages → Sauvegarde writes a JSON
+file and hands it to the Android share sheet. The games can always be
+re-imported from Chess.com; the analyses cannot, and they are hours of the
+phone's own CPU.
 
-So Stockfish runs in the backend, via UCI. Free, unlimited, and every ply gets a
-real evaluation.
-
----
-
-## Architecture
+## How it fits together
 
 ```
-React + Vite (Vercel)  ──HTTP/JWT──>  FastAPI (Render, Docker)
-                                        ├── PostgreSQL
-                                        ├── Stockfish (local UCI process)
-                                        └── Chess.com public API (polled)
+React + Vite  ──►  Capacitor WebView  ──┬──►  SQLite          (@capacitor-community/sqlite)
+                                        ├──►  Stockfish 17.1  (native binary, UCI over a pipe)
+                                        └──►  api.chess.com   (CapacitorHttp, so no CORS)
 ```
 
-Two background jobs run inside the API process (APScheduler):
+Three things about that are worth knowing before changing any of it.
 
-| Job               | Interval | What it does                                            |
-| ----------------- | -------- | ------------------------------------------------------- |
-| `poll_chess_com`  | 15 s     | Fetches the current month's archive for every linked user, inserts unseen games as `pending` |
-| `analysis_worker` | 5 s      | Takes up to 3 pending games per tick and runs Stockfish over them |
+**The engine is executed, not linked.** Stockfish ships as
+`jniLibs/arm64-v8a/libstockfish.so` and is spawned as a child process from
+`nativeLibraryDir`. Since API 29 that is the only directory an app may execute
+from, and getting a real file to appear there requires
+`useLegacyPackaging = true` in `app/build.gradle`. Without it the path exists
+but names nothing on disk and `exec` fails with `ENOENT`. That flag is also why
+the engine is stored twice on the device.
 
-Because the free tier sleeps after ~15 min, **every login also triggers a
-catch-up sync** of the last `SYNC_MONTHS_ON_LOGIN` archives (default 3). Nothing
-is missed while the instance was asleep — it just arrives when you open the app.
+**HTTP goes through `CapacitorHttp`, not `fetch`.** It is a native stack, so
+the browser's CORS rules never apply — which is the whole reason a serverless
+version of this app is possible at all. Chess.com sends no CORS headers.
 
-### How a move is judged
+**The analysis queue only runs while the app is open.** Android will not let a
+process burn a core for an hour in the background, and a phone analysing games
+in a pocket would be flat by lunchtime. Starting it is the user's decision.
+
+## How a move is judged
 
 Each position is evaluated exactly once, so an N-move game costs N+1 engine
 calls. Move *i* pairs eval[i] (before) with eval[i+1] (after).
 
-- Evals are clamped to ±10 pawns before computing loss — being up 30 vs up 40 is
-  not a real difference.
+- Evals are clamped to ±10 pawns before computing loss — being up 30 vs up 40
+  is not a real difference.
 - Playing the engine's own top move is forced to 0 loss (otherwise search noise
   between two depths shows up as a fake mistake).
 - Thresholds: **inaccuracy ≥ 50 cp**, **mistake ≥ 100 cp**, **blunder ≥ 300 cp**.
 - Accuracy uses Lichess's win-probability model, averaged over the side's moves.
+  It is *not* Chess.com's CAPS2, so the two numbers will not match.
 - Phases: opening through move 12, endgame once ≤ 6 minor/major pieces remain,
   middlegame otherwise.
 
----
+This model was ported from a Python backend that no longer exists in the tree.
+It is pinned to `frontend/src/engine/__fixtures__/golden.json`, a recording of
+that backend's output, and the port is tested against it move by move.
 
-## Local development
-
-### Backend
-
-```bash
-cd backend
-python -m venv .venv
-.venv\Scripts\activate          # source .venv/bin/activate on macOS/Linux
-pip install -r requirements.txt
-cp .env.example .env            # then edit STOCKFISH_PATH
-uvicorn app.main:app --reload --port 8000
-```
-
-Stockfish is **not** bundled. Get a binary and point `STOCKFISH_PATH` at it:
-
-- Windows: download from <https://stockfishchess.org/download/> and unzip, e.g.
-  to `backend/engine/stockfish-windows-x86-64-avx2.exe` (that path is
-  git-ignored).
-- macOS: `brew install stockfish` → `/opt/homebrew/bin/stockfish`
-- Linux: `apt install stockfish` → `/usr/games/stockfish`
-
-`GET /api/health` reports whether the engine was found. Interactive API docs at
-<http://localhost:8000/docs>.
-
-SQLite is the default locally; Postgres in production. Tables are created on
-startup — no migration tool for now.
-
-### Frontend
+## Development
 
 ```bash
 cd frontend
 npm install
 npm run dev        # http://localhost:5173
+npm test           # 158 tests, no device needed
+npm run lint
 ```
 
-Vite proxies `/api` and `/auth` to `127.0.0.1:8000`, so dev needs no CORS setup.
+Most of the app is testable off-device on purpose: the database layer runs
+against Node's built-in SQLite, so the SQL exercised in tests is the SQL that
+runs on the phone, and the judgment model is checked against the fixture. What
+cannot be tested here is the native surface — `src/data/capacitor.js`,
+`src/data/share.js` and `src/engine/stockfish.js`'s plugin side — which is why
+those files are as thin as they are.
 
----
+The browser build has no engine, no SQLite plugin and no share sheet, so it is
+useful for laying out screens and not much else.
 
-## Deployment
+### Building the APK
 
-### Backend → Render
+`.github/workflows/android.yml` builds a debug APK on every push. Local builds
+need JDK 21 and the Android SDK:
 
-`render.yaml` at the repo root declares the Docker web service plus a free
-Postgres instance. The Dockerfile installs Stockfish from Debian
-(`/usr/games/stockfish`).
-
-Set by hand after the first deploy:
-
-- `CORS_ORIGINS` → your Vercel URL, e.g. `https://chess-analyzer.vercel.app`
-- `REGISTRATION_CODE` → any shared string. **Do this.** The app is on the public
-  internet; without a code anyone who finds the URL can register.
-
-`SECRET_KEY` is generated by Render. Changing it later invalidates all tokens.
-
-### Frontend → Vercel
-
-Root directory `frontend`. `frontend/vercel.json` already handles the SPA
-rewrite. Set one env var:
-
-```
-VITE_API_URL=https://<your-render-service>.onrender.com
+```bash
+cd frontend
+npm run engine:fetch   # downloads Stockfish 17.1, hash-pinned, ~80 MB
+npm run android:sync
+cd android && ./gradlew assembleDebug
 ```
 
-### Free-tier caveats
+`engine:fetch` is required; the Gradle build fails with an explanation rather
+than producing an APK that cannot analyse anything.
 
-- The instance sleeps after ~15 min idle. First request afterwards takes ~30 s
-  to wake, and the 15 s poller only runs while awake — the login catch-up covers
-  the gap.
-- Render free gives ~0.1 CPU. Depth 14 takes a few seconds per game; a large
-  first import will chew through the queue slowly but steadily. Lower
-  `ENGINE_DEPTH` if it feels slow, raise it (18–20) if you move to a paid plan.
+### Releasing
 
----
+Tag it:
 
-## API
+```bash
+git tag v1.2.3 && git push origin v1.2.3
+```
 
-| Method | Path                         | Notes                                    |
-| ------ | ---------------------------- | ---------------------------------------- |
-| POST   | `/auth/register`             | `{username, password, chess_com_username?, registration_code?}` |
-| POST   | `/auth/login`                | returns a JWT; also triggers catch-up sync |
-| GET    | `/auth/me`, PATCH `/auth/me` | read / link the Chess.com username        |
-| GET    | `/api/games`                 | filters: `limit`, `offset`, `result`, `time_class`, `color` |
-| GET    | `/api/games/{id}`            | includes the PGN                          |
-| GET    | `/api/games/{id}/analysis`   | full per-ply data                         |
-| POST   | `/api/games/{id}/refresh`    | re-queue for analysis                     |
-| POST   | `/api/sync`                  | `?months=N` manual import                 |
-| GET    | `/api/sync/status`           | queue counters                            |
-| GET    | `/api/stats`                 | win rate, accuracy, phase breakdown, top opponents/openings |
-| GET    | `/api/stats/trends`          | `?period=day|week|month`                  |
-| GET    | `/api/stats/mistakes`        | worst moves across all games              |
-| GET    | `/api/health`                | engine status                             |
+`.github/workflows/release.yml` builds a signed APK, verifies the signature
+with `apksigner`, and attaches it to a GitHub Release, which is what Obtainium
+polls. `v1.2.3` becomes `versionCode` 10203.
 
-Every `/api` route is scoped to the token's user — one account cannot read
-another's games (returns 404).
+The signing key is permanent. Android refuses an update signed by a different
+key, and the way around that is an uninstall, which destroys the only copy of
+the analyses. The keystore lives in the repository secrets and is not rotated.
 
----
+## Licence
 
-## Notes
-
-- `truststore` is installed so the backend trusts the OS certificate store.
-  Behind a TLS-intercepting corporate proxy (Zscaler and friends) plain certifi
-  fails with `CERTIFICATE_VERIFY_FAILED`. Note that such a proxy may also block
-  `api.chess.com` outright — that is a network policy, not an app bug, and does
-  not affect the deployed backend.
-- Variants (Chess960, bughouse…) are skipped at import; only standard chess is
-  analysed.
-- Games are capped at `MAX_PLIES` (200) so a 300-move endgame grind cannot stall
-  the queue.
-
-## Not built yet
-
-Phase 2 of the brief: pattern detection beyond per-phase ACPL, rule-based
-recommendations, PWA install. Phase 3: LLM explanations.
+GPL-3.0, because the APK ships a Stockfish binary. See [LICENSE](LICENSE) and
+[THIRD_PARTY.md](THIRD_PARTY.md).

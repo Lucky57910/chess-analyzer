@@ -1,13 +1,3 @@
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-*.db
-
-# Local engine binary (65 MB, downloaded per machine)
-backend/engine/
-
 # Node
 node_modules/
 dist/
@@ -15,7 +5,6 @@ dist/
 # Secrets
 .env
 .env.local
-deploy/.env
 
 # Claude Code local settings
 .claude/settings.local.json

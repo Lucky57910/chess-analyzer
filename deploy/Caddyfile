@@ -1,6 +1,0 @@
-# Terminates TLS and forwards to the API. Caddy obtains and renews the
-# Let's Encrypt certificate on its own, which is the whole reason it is here.
-{$API_DOMAIN} {
-	encode zstd gzip
-	reverse_proxy api:8000
-}

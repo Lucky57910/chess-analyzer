@@ -1,13 +1,6 @@
-# These files are consumed by Linux on the server, whatever the checkout host
-# converts them to locally. A shell script that arrives with CRLF fails as
-# "bad interpreter", which is a confusing way to lose an evening.
-*.sh text eol=lf
-Dockerfile text eol=lf
-deploy/* text eol=lf
-
-# `gradlew` is a shell script with no extension, so the *.sh rule above
-# misses it. CI runs it on Linux; checked out with CRLF it dies as
-# "bad interpreter" - the exact failure that comment warns about.
+# `gradlew` is a shell script with no extension. CI runs it on Linux; checked
+# out with CRLF it dies as "bad interpreter", which is a confusing way to lose
+# an evening.
 frontend/android/gradlew text eol=lf
 frontend/android/gradle/wrapper/*.properties text eol=lf
 
