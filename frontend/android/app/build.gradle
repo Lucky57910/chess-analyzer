@@ -1,5 +1,15 @@
 apply plugin: 'com.android.application'
 
+// Signing comes from the environment, never from a file in the repository.
+//
+// The signature is not a build detail here: Android refuses to install an
+// update signed by a different key, and there is no store account to fall back
+// on. A rotated key means every user - all one of them - uninstalls, and the
+// local database, which is the only copy of the analyses, goes with it. So the
+// keystore lives in the GitHub secrets and nowhere in this tree.
+def keystorePath = System.getenv("ANDROID_KEYSTORE_FILE")
+def keystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+
 android {
     namespace = "io.github.lucky57910.chessanalyzer"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,8 +17,11 @@ android {
         applicationId "io.github.lucky57910.chessanalyzer"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // The release workflow derives both from the git tag. The fallbacks are
+        // for a local debug build, and are deliberately below anything a tag
+        // can produce so a hand-built APK never masquerades as a release.
+        versionCode Integer.parseInt(System.getenv("ANDROID_VERSION_CODE") ?: "1")
+        versionName System.getenv("ANDROID_VERSION_NAME") ?: "0.0.0-dev"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             // The engine ships as a 64-bit ARM binary and there is no other
@@ -22,10 +35,26 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        if (keystorePath) {
+            release {
+                storeFile file(keystorePath)
+                storePassword keystorePassword
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                // PKCS12 keeps one password for the store and the key. The
+                // separate variable is there for a keystore that does not.
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD") ?: keystorePassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (keystorePath) {
+                signingConfig signingConfigs.release
+            }
         }
     }
 
@@ -54,6 +83,16 @@ android {
 // history, so it is fetched rather than committed. Failing here with an
 // instruction beats failing on the phone with ENOENT.
 tasks.configureEach { task ->
+    // An unsigned release APK cannot be installed at all, so producing one and
+    // discovering that on the phone is worse than not building it.
+    if (task.name == "assembleRelease" && !keystorePath) {
+        task.doFirst {
+            throw new GradleException(
+                "ANDROID_KEYSTORE_FILE is not set: a release build would be unsigned.\n" +
+                "Release APKs are built by .github/workflows/release.yml, which holds the keystore."
+            )
+        }
+    }
     if (task.name == "preBuild") {
         task.doFirst {
             def engine = file("src/main/jniLibs/arm64-v8a/libstockfish.so")

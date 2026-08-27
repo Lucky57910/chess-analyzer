@@ -1,0 +1,165 @@
+# Builds a signed release APK and publishes it as a GitHub Release.
+#
+# This is the distribution channel. There is no app store: Obtainium polls the
+# releases of this repository and installs the APK attached here, which is why
+# the asset name and the signing key both have to stay stable. Android refuses
+# an update signed by a different key, and the local database - the only copy of
+# the analyses - does not survive the uninstall that would be needed to get
+# around that. The keystore therefore lives in the repository secrets and is
+# never rotated.
+#
+# Cut a release by tagging: `git tag v1.0.0 && git push origin v1.0.0`.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  # A signed build without publishing anything, for checking the signing path
+  # before committing to a version number.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp the APK with (no release is created)"
+        default: "0.0.1"
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    working-directory: frontend
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # versionCode has to increase with every release Android will accept, and
+      # it is an integer, so the tag is folded into one: v1.2.3 -> 10203. That
+      # leaves 99 patches and 99 minors per major, which is more than this app
+      # will ever need, and stays ordered.
+      - name: Derive the version
+        id: version
+        run: |
+          version="${{ inputs.version }}"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version '$version' is not MAJOR.MINOR.PATCH"
+            exit 1
+          fi
+          IFS=. read -r major minor patch <<< "$version"
+          echo "name=$version" >> "$GITHUB_OUTPUT"
+          echo "code=$((major * 10000 + minor * 100 + patch))" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      # Same gate as the debug workflow. A release is a worse place to discover
+      # that the judgment model drifted from the fixture.
+      - run: npm test
+      - run: npm run lint
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Cache Stockfish
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: frontend/android/app/src/main/jniLibs
+          key: stockfish-${{ hashFiles('frontend/scripts/fetch-engine.mjs') }}
+
+      - name: Fetch Stockfish
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        run: npm run engine:fetch
+
+      - name: Build web assets and sync
+        run: npm run android:sync
+
+      # Outside the workspace so no later step can archive or upload it by
+      # accident, and deleted at the end of the job regardless of outcome.
+      - name: Restore the keystore
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.p12"
+
+      - name: Assemble signed release APK
+        working-directory: frontend/android
+        env:
+          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.p12
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: chess-analyzer
+          ANDROID_VERSION_NAME: ${{ steps.version.outputs.name }}
+          ANDROID_VERSION_CODE: ${{ steps.version.outputs.code }}
+        run: ./gradlew --no-daemon assembleRelease
+
+      # Gradle will happily produce an unsigned release APK if the signing
+      # config silently failed to apply, and it is unsigned APKs that fail on
+      # the phone rather than in CI. Ask the tool that Android itself uses.
+      - name: Verify the signature
+        working-directory: frontend/android
+        run: |
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
+          "$apksigner" verify --verbose --print-certs \
+            app/build/outputs/apk/release/app-release.apk
+
+      - name: Name the asset
+        id: apk
+        working-directory: frontend/android
+        run: |
+          # Obtainium matches on the asset name, so it carries the version and
+          # nothing else that could change between releases.
+          name="chess-analyzer-${{ steps.version.outputs.name }}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$RUNNER_TEMP/$name"
+          echo "path=$RUNNER_TEMP/$name" >> "$GITHUB_OUTPUT"
+          echo "size=$(du -h "$RUNNER_TEMP/$name" | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Delete the keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.p12"
+
+      - name: Publish the release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<'NOTES'
+          Sideloaded Android build. Everything runs on the phone: Stockfish, the
+          database and the analysis. No account, no server, no network beyond
+          the public Chess.com API.
+
+          **Install:** download the APK below, or point
+          [Obtainium](https://github.com/ImranR98/Obtainium) at this repository
+          to get updates automatically.
+
+          **Before reinstalling:** export a backup from Réglages. The database
+          lives only on the phone, and the analyses cannot be recovered from
+          Chess.com.
+          NOTES
+          printf '\nAPK: %s, arm64-v8a only, Android 6+.\n' \
+            "${{ steps.apk.outputs.size }}" >> "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" "${{ steps.apk.outputs.path }}" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "$RUNNER_TEMP/notes.md"
+
+      # A dispatch run has nowhere to publish to, so the APK it built - the
+      # whole point of running it - is kept as an artifact instead.
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type != 'tag'
+        with:
+          name: chess-analyzer-release
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error

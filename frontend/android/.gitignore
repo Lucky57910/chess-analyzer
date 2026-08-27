@@ -57,6 +57,7 @@ captures/
 # "update" to this app, and losing it means users must uninstall to move on.
 *.jks
 *.keystore
+*.p12
 
 # External native build folder generated in Android Studio 2.2 and later
 .externalNativeBuild
