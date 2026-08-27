@@ -149,7 +149,7 @@ jobs:
           lives only on the phone, and the analyses cannot be recovered from
           Chess.com.
           NOTES
-          printf '\nAPK: %s, arm64-v8a only, Android 6+.\n' \
+          printf '\nAPK: %s, arm64-v8a only, Android 7+ (minSdk 24).\n' \
             "${{ steps.apk.outputs.size }}" >> "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" "${{ steps.apk.outputs.path }}" \
             --title "$GITHUB_REF_NAME" \
