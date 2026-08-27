@@ -287,3 +287,36 @@ describe("health", () => {
     expect(health.engine.error).toMatch(/\/nope/);
   });
 });
+
+describe("backup", () => {
+  it("hands back an archive the page can serialise", async () => {
+    const ctx = await fixture();
+    const [first] = await ctx.api.games({ limit: 1 });
+    await ctx.store.saveAnalysis(first.id, analysisResult());
+
+    const payload = await ctx.api.exportBackup();
+    expect(payload.app).toBe("chess-analyzer");
+    expect(payload.games).toHaveLength(ROWS.length);
+    expect(JSON.parse(JSON.stringify(payload)).games.filter((g) => g.analysis)).toHaveLength(1);
+  });
+
+  it("restores into a database that has never seen those games", async () => {
+    const source = await fixture();
+    const [first] = await source.api.games({ limit: 1 });
+    await source.store.saveAnalysis(first.id, analysisResult());
+    const payload = JSON.parse(JSON.stringify(await source.api.exportBackup()));
+
+    const target = await fixture();
+    await target.repo.run("DELETE FROM games");
+    const result = await target.api.importBackup(payload);
+
+    expect(result.games).toBe(ROWS.length);
+    expect(result.analyses).toBe(1);
+    expect((await target.api.games({ limit: 100 })).length).toBe(ROWS.length);
+  });
+
+  it("refuses a file that is not one of ours", async () => {
+    const ctx = await fixture();
+    await expect(ctx.api.importBackup({ app: "other" })).rejects.toThrow(/Chess Analyzer/);
+  });
+});

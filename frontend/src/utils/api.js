@@ -110,6 +110,22 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
       return { status: "pending" };
     },
 
+    /**
+     * The whole database, as a plain object.
+     *
+     * There is nothing behind this app any more, so this is the only copy of an
+     * archive that took the phone hours to compute.
+     */
+    async exportBackup() {
+      const { exportBackup } = await import("../data/backup.js");
+      return exportBackup(repo);
+    },
+
+    async importBackup(payload) {
+      const { importBackup } = await import("../data/backup.js");
+      return importBackup(repo, payload);
+    },
+
     async sync(months = 1) {
       const result = await sync.importGames({ months });
       const status = await sync.status();

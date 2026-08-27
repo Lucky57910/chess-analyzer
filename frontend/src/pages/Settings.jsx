@@ -1,4 +1,6 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { backupFilename } from '../data/backup'
+import { saveAndShare } from '../data/share'
 import { useQueue } from '../hooks/useQueue'
 import { useSettings } from '../hooks/useSettings'
 import { api } from '../utils/api'
@@ -15,6 +17,7 @@ export default function Settings() {
   const [message, setMessage] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
+  const fileInput = useRef(null)
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => setHealth(null))
@@ -46,6 +49,52 @@ export default function Settings() {
         `${res.imported} partie(s) importée(s)` +
           (res.updated ? `, ${res.updated} mise(s) à jour` : '') +
           `, ${res.pending_analysis} en file d’analyse.`,
+      )
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function exportBackup() {
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    try {
+      const payload = await api.exportBackup()
+      const name = backupFilename()
+      const { uri, shared } = await saveAndShare(name, JSON.stringify(payload), {
+        title: 'Sauvegarde Chess Analyzer',
+      })
+      const analysed = payload.games.filter((g) => g.analysis).length
+      setMessage(
+        `${payload.games.length} partie(s) dont ${analysed} analysée(s) exportée(s).` +
+          (shared ? '' : ` Fichier enregistré : ${uri}`),
+      )
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function restoreBackup(event) {
+    const file = event.target.files?.[0]
+    // Clearing it lets the user pick the same file again after a failure.
+    event.target.value = ''
+    if (!file) return
+
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    try {
+      const res = await api.importBackup(JSON.parse(await file.text()))
+      await refreshStatus()
+      setMessage(
+        `${res.games} partie(s) et ${res.analyses} analyse(s) restaurées` +
+          (res.skipped ? `, ${res.skipped} déjà présente(s)` : '') +
+          '.',
       )
     } catch (err) {
       setError(err.message)
@@ -158,6 +207,42 @@ export default function Settings() {
         ) : (
           <p className="mt-2 text-sm text-ink-500">État du moteur inconnu.</p>
         )}
+      </section>
+
+      <section className="rounded-lg border border-ink-800 bg-ink-900 p-4">
+        <h2 className="text-sm font-medium text-ink-300">Sauvegarde</h2>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={exportBackup}
+            disabled={busy}
+            className="rounded-md border border-ink-700 px-3 py-2 text-sm text-ink-300 hover:bg-ink-800 disabled:opacity-50"
+          >
+            Exporter
+          </button>
+          <button
+            type="button"
+            onClick={() => fileInput.current?.click()}
+            disabled={busy}
+            className="rounded-md border border-ink-700 px-3 py-2 text-sm text-ink-300 hover:bg-ink-800 disabled:opacity-50"
+          >
+            Restaurer
+          </button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept="application/json,.json"
+            onChange={restoreBackup}
+            className="hidden"
+          />
+        </div>
+        {/* The reason this screen has a backup button at all, said once. */}
+        <p className="mt-2 text-xs text-ink-500">
+          Tout est stocké sur ce téléphone : une désinstallation ou un appareil perdu emporte les
+          analyses, que Chess.com ne peut pas rendre. L’export produit un fichier JSON à envoyer
+          ailleurs. La restauration ajoute ce qui manque et n’écrase jamais une partie déjà
+          présente.
+        </p>
       </section>
 
       {message && (
