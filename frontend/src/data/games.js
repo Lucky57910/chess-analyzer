@@ -6,6 +6,7 @@
  * the user's, so scoping it to them again would be theatre.
  */
 
+import { gameKind } from "./chessCom.js";
 import { hydrate } from "./db.js";
 import { JSON_COLUMNS } from "./schema.js";
 
@@ -67,6 +68,7 @@ const GAME_COLUMNS = [
   "time_class",
   "time_control",
   "rated",
+  "game_kind",
   "eco",
   "opening",
   "chess_com_accuracy",
@@ -108,9 +110,14 @@ export function createGameStore(repo) {
           continue;
         }
 
-        const values = GAME_COLUMNS.map((column) =>
-          column === "rated" ? (row.rated ? 1 : 0) : (row[column] ?? null),
-        );
+        const values = GAME_COLUMNS.map((column) => {
+          if (column === "rated") return row.rated ? 1 : 0;
+          // Filed here rather than by the normaliser, whose output is pinned to
+          // a recording of the Python backend. The rule reads `rated`, which
+          // the normalised row carries, so it makes no difference where it runs.
+          if (column === "game_kind") return row.game_kind ?? gameKind(row);
+          return row[column] ?? null;
+        });
         await repo.run(
           `INSERT INTO games (${GAME_COLUMNS.join(", ")}, created_at) ` +
             `VALUES (${GAME_COLUMNS.map(() => "?").join(", ")}, ?)`,
@@ -127,7 +134,7 @@ export function createGameStore(repo) {
     },
 
     /** Newest first, with the filters the games list offers. */
-    async list({ limit = 50, offset = 0, result, timeClass, color, status, search } = {}) {
+    async list({ limit = 50, offset = 0, result, timeClass, color, status, kind, search } = {}) {
       const clauses = [];
       const values = [];
       const term = search?.trim();
@@ -155,6 +162,10 @@ export function createGameStore(repo) {
       if (status) {
         clauses.push("analysis_status = ?");
         values.push(status);
+      }
+      if (kind) {
+        clauses.push("game_kind = ?");
+        values.push(kind);
       }
       const where = clauses.length ? `WHERE ${clauses.join(" AND ")}` : "";
 

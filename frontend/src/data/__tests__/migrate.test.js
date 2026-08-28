@@ -267,3 +267,66 @@ describe("the repository over a migrated database", () => {
     expect(await repo.getSetting("chess_com_username")).toBe("maxime");
   });
 });
+
+describe("the game-kind migration", () => {
+  /** A v1 database with one rated game and one unrated one already in it. */
+  async function withMixedGames() {
+    const { database, driver } = fresh();
+    await driver.execute(SCHEMA);
+    await driver.execute("PRAGMA user_version = 1");
+    for (const [id, rated] of [
+      ["rated-one", 1],
+      ["casual-one", 0],
+    ]) {
+      database
+        .prepare(
+          `INSERT INTO games (chess_com_game_id, pgn, user_color, result, rated, played_at, created_at)
+           VALUES (?, '1. e4', 'white', 'win', ?, '2026-08-01T00:00:00Z', '2026-08-01T00:00:00Z')`,
+        )
+        .run(id, rated);
+    }
+    return { database, driver };
+  }
+
+  const kinds = (database) =>
+    Object.fromEntries(
+      database
+        .prepare("SELECT chess_com_game_id AS id, game_kind FROM games")
+        .all()
+        .map((row) => [row.id, row.game_kind]),
+    );
+
+  // The column has to work on the archive already on the phone, not only on
+  // games synced from here on: the whole point is to clean up existing stats.
+  it("backfills the games that were already imported", async () => {
+    const ctx = await withMixedGames();
+    await migrate(ctx.driver);
+
+    expect(kinds(ctx.database)).toEqual({ "rated-one": "rated", "casual-one": "training" });
+  });
+
+  it("indexes the column it just added", async () => {
+    const ctx = await withMixedGames();
+    await migrate(ctx.driver);
+    expect(indexes(ctx.database)).toContain("ix_games_kind");
+  });
+
+  // Re-running happens whenever the process dies between the step and the
+  // stamp. Undoing a decision made since would be the expensive kind of bug.
+  // Re-running happens whenever the process dies between the step and the
+  // stamp, so the step has to land on the same answer every time. It does
+  // because it derives the kind rather than deciding it - and the flip side,
+  // asserted here so nobody is surprised by it later, is that it overwrites
+  // anything that changed the column since.
+  it("recomputes the same answer when it runs again", async () => {
+    const ctx = await withMixedGames();
+    await migrate(ctx.driver);
+    const first = kinds(ctx.database);
+
+    ctx.database.prepare("UPDATE games SET game_kind = 'rated'").run();
+    await ctx.driver.execute("PRAGMA user_version = 2");
+    await migrate(ctx.driver);
+
+    expect(kinds(ctx.database)).toEqual(first);
+  });
+});

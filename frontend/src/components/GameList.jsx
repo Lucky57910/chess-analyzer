@@ -46,6 +46,11 @@ function GameRow({ game }) {
           ) : null}
         </div>
         <div className="truncate text-xs text-ink-500">
+          {game.game_kind === 'training' && (
+            <span className="mr-1 rounded bg-ink-700 px-1 py-0.5 text-[10px] text-ink-300">
+              Entraînement
+            </span>
+          )}
           {formatDate(game.played_at)} · {game.time_class || '?'}
           {game.opening ? ` · ${game.opening}` : ''}
         </div>

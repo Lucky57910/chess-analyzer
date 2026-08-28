@@ -43,6 +43,15 @@ const FILTER_FIELDS = [
     ],
   },
   {
+    key: 'kind',
+    label: 'Type',
+    options: [
+      ['', 'Toutes'],
+      ['rated', 'Classées'],
+      ['training', 'Entraînement'],
+    ],
+  },
+  {
     key: 'status',
     label: 'Analyse',
     options: [
@@ -54,7 +63,7 @@ const FILTER_FIELDS = [
   },
 ]
 
-const NO_FILTERS = { result: '', time_class: '', color: '', status: '', search: '' }
+const NO_FILTERS = { result: '', time_class: '', color: '', kind: '', status: '', search: '' }
 
 function FilterBar({ filters, onChange, searchInput, onSearch, onReset, active }) {
   return (
@@ -66,7 +75,7 @@ function FilterBar({ filters, onChange, searchInput, onSearch, onReset, active }
         placeholder="Chercher un adversaire ou une ouverture"
         className="w-full rounded-md border border-ink-700 bg-ink-950 px-3 py-2 text-sm text-ink-100 placeholder:text-ink-500"
       />
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
         {FILTER_FIELDS.map(({ key, label, options }) => (
           <label key={key} className="flex flex-col gap-1 text-xs text-ink-500">
             {label}

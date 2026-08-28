@@ -492,7 +492,7 @@ describe("the stats page", () => {
   // afternoon swings the line end to end, so the smoothed daily view opens.
   it("opens on the smoothed daily view", async () => {
     renderApp("/stats");
-    await waitFor(() => expect(api.smoothedTrends).toHaveBeenCalledWith(3, 60));
+    await waitFor(() => expect(api.smoothedTrends).toHaveBeenCalledWith(3, 60, "rated"));
     expect(api.trends).not.toHaveBeenCalled();
     expect(api.judgmentTrends).not.toHaveBeenCalled();
     expect(await screen.findByText(/la semaine autour d’elle/)).toBeDefined();
@@ -501,23 +501,23 @@ describe("the stats page", () => {
   it("asks for a window that matches the granularity", async () => {
     renderApp("/stats");
     fireEvent.click(await screen.findByRole("button", { name: "Semaine" }));
-    await waitFor(() => expect(api.trends).toHaveBeenCalledWith("week", 26));
+    await waitFor(() => expect(api.trends).toHaveBeenCalledWith("week", 26, "rated"));
 
     fireEvent.click(await screen.findByRole("button", { name: "Jour" }));
-    await waitFor(() => expect(api.trends).toHaveBeenCalledWith("day", 60));
+    await waitFor(() => expect(api.trends).toHaveBeenCalledWith("day", 60, "rated"));
 
     fireEvent.click(await screen.findByRole("button", { name: "Mois" }));
-    await waitFor(() => expect(api.trends).toHaveBeenCalledWith("month", 24));
+    await waitFor(() => expect(api.trends).toHaveBeenCalledWith("month", 24, "rated"));
   });
 
   // Both time series read the same granularity, so the selector drives both.
   it("moves the judgment series with the granularity too", async () => {
     renderApp("/stats");
     fireEvent.click(await screen.findByRole("button", { name: "Semaine" }));
-    await waitFor(() => expect(api.judgmentTrends).toHaveBeenCalledWith("week", 26));
+    await waitFor(() => expect(api.judgmentTrends).toHaveBeenCalledWith("week", 26, "rated"));
 
     fireEvent.click(await screen.findByRole("button", { name: "Jour" }));
-    await waitFor(() => expect(api.judgmentTrends).toHaveBeenCalledWith("day", 60));
+    await waitFor(() => expect(api.judgmentTrends).toHaveBeenCalledWith("day", 60, "rated"));
   });
 
   // One pass over the archive builds both halves, so the smoothed view must
@@ -541,7 +541,7 @@ describe("the stats page", () => {
     expect(api.mistakes).toHaveBeenCalledTimes(1);
 
     fireEvent.click(await screen.findByRole("button", { name: "Jour" }));
-    await waitFor(() => expect(api.trends).toHaveBeenCalledWith("day", 60));
+    await waitFor(() => expect(api.trends).toHaveBeenCalledWith("day", 60, "rated"));
 
     expect(api.stats).toHaveBeenCalledTimes(1);
     expect(api.mistakes).toHaveBeenCalledTimes(1);
@@ -587,6 +587,31 @@ describe("the stats page", () => {
     expect(fewerBlunders.className).toContain("text-good");
     const moreAccuracy = await screen.findByText(/▲ 4 pts/);
     expect(moreAccuracy.className).toContain("text-good");
+  });
+
+  // A game the user could take moves back in is not a measurement of how they
+  // play. Counting it in quietly flatters every number on the screen, so the
+  // rated view is the one that opens.
+  it("opens on rated games and asks every statistic for the same kind", async () => {
+    renderApp("/stats");
+    await waitFor(() => expect(api.stats).toHaveBeenCalledWith(undefined, "rated"));
+    expect(api.mistakes).toHaveBeenCalledWith("rated");
+    expect(api.insights).toHaveBeenCalledWith({ kind: "rated" });
+    expect(await screen.findByText(/celles où le résultat comptait/)).toBeDefined();
+  });
+
+  it("carries a change of kind into every statistic at once", async () => {
+    renderApp("/stats");
+    await waitFor(() => expect(api.stats).toHaveBeenCalledWith(undefined, "rated"));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Entraînement" }));
+
+    await waitFor(() => expect(api.stats).toHaveBeenCalledWith(undefined, "training"));
+    expect(api.mistakes).toHaveBeenCalledWith("training");
+    expect(api.insights).toHaveBeenCalledWith({ kind: "training" });
+    await waitFor(() =>
+      expect(api.smoothedTrends).toHaveBeenCalledWith(3, 60, "training"),
+    );
   });
 
   it("counts blunders per game or per hundred moves, on demand", async () => {

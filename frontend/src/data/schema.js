@@ -11,7 +11,7 @@
  * repository parses on the way out so callers never see the encoding.
  */
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * The version handed to the SQLite plugin, which is not our schema version.
@@ -121,8 +121,10 @@ export const JSON_COLUMNS = ["moves", "errors", "blunders", "judgment_counts", "
  *      ignoring it; a downgrade after a rewrite is not reversible at all, and
  *      this app is sideloaded, so downgrades happen.
  *
- * A step is `{ version, name }` plus either `sql` to execute or `run(driver)`
- * for anything that has to look at the database first.
+ * A step is `{ version, name }` plus either `sql` to execute or
+ * `run(driver, helpers)` for anything that has to look at the database first.
+ * The helpers are handed in rather than imported, because db.js imports this
+ * file and a step reaching back for them would close the circle.
  */
 export const MIGRATIONS = [
   {
@@ -132,5 +134,26 @@ export const MIGRATIONS = [
     // decide whether the copy it holds is still good. Without an index that is
     // a scan of the widest table in the database; with one it is a lookup.
     sql: `CREATE INDEX IF NOT EXISTS ix_analyses_updated ON analyses (updated_at);`,
+  },
+  {
+    version: 3,
+    name: "mark how a game was played",
+    // Two values, and a default that keeps every existing row where it was:
+    // 'rated' is the ordinary case, so a column added to an archive of games
+    // says nothing new about them until the backfill below runs.
+    run: async (driver, { addColumn }) => {
+      await addColumn(driver, "games", "game_kind", "TEXT NOT NULL DEFAULT 'rated'");
+      // Backfilled from `rated`, which every imported game already carries, so
+      // the split works on the archive already on the phone rather than only on
+      // games synced from here on.
+      //
+      // This is a derivation, not a decision: re-running it - which happens if
+      // the process dies before the version is stamped - recomputes the same
+      // answer from the same column. Which also means it would overwrite a
+      // manual reclassification, so when the app grows one it needs a column of
+      // its own for the override rather than editing this one in place.
+      await driver.execute("UPDATE games SET game_kind = 'training' WHERE rated = 0");
+      await driver.execute("CREATE INDEX IF NOT EXISTS ix_games_kind ON games (game_kind);");
+    },
   },
 ];

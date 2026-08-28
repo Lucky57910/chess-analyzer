@@ -73,6 +73,24 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
     return games;
   };
 
+  /**
+   * The archive, narrowed to one kind of game.
+   *
+   * `rated` by default, everywhere: the point of the split is that a game the
+   * player could take moves back in does not belong in the average that stands
+   * for their strength. Filtering here rather than in SQL keeps it to one
+   * cached load - a query per kind would undo that.
+   */
+  const archiveFor = async (kind = "rated") => {
+    const games = await loadAllGames();
+    if (kind === "all") return games;
+    // No fallback for a missing kind: the column is NOT NULL with a default,
+    // and the migration backfilled every row that predates it, so a game
+    // without one cannot reach here. A `?? "rated"` would read as though it
+    // could, and would quietly file anything unexpected as rated play.
+    return games.filter((game) => game.game_kind === kind);
+  };
+
   return {
     async settings() {
       return {
@@ -104,6 +122,7 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
         timeClass: params.time_class,
         color: params.color,
         status: params.status,
+        kind: params.kind,
         search: params.search,
       });
       return { games: games.map(flatten), total };
@@ -175,20 +194,19 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
       return { ...status, total: await store.count() };
     },
 
-    stats: async (days) => {
+    stats: async (days, kind) => {
       const { computeStats } = await import("../data/stats.js");
-      const games = await loadAllGames();
-      return computeStats(withinDays(games, days));
+      return computeStats(withinDays(await archiveFor(kind), days));
     },
 
-    trends: async (period = "week", limit = 12) => {
+    trends: async (period = "week", limit = 12, kind) => {
       const { computeTrends } = await import("../data/stats.js");
-      return computeTrends(await loadAllGames(), { period, limit });
+      return computeTrends(await archiveFor(kind), { period, limit });
     },
 
-    judgmentTrends: async (period = "week", limit = 12) => {
+    judgmentTrends: async (period = "week", limit = 12, kind) => {
       const { computeJudgmentTrends } = await import("../data/stats.js");
-      return computeJudgmentTrends(await loadAllGames(), { period, limit });
+      return computeJudgmentTrends(await archiveFor(kind), { period, limit });
     },
 
     /**
@@ -198,9 +216,9 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
      * every game and every analysis, so a call per panel would be eight passes
      * over the database to draw one screen.
      */
-    insights: async (options) => {
+    insights: async (options = {}) => {
       const { computeInsights } = await import("../data/insights.js");
-      return computeInsights(await loadAllGames(), options);
+      return computeInsights(await archiveFor(options.kind), options);
     },
 
     /**
@@ -210,14 +228,14 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
      * counts share a calendar axis and a single pass builds both, where
      * `trends` and `judgmentTrends` are two passes over the archive.
      */
-    smoothedTrends: async (radius = 3, limit = 60) => {
+    smoothedTrends: async (radius = 3, limit = 60, kind) => {
       const { computeSmoothedTrends } = await import("../data/stats.js");
-      return computeSmoothedTrends(await loadAllGames(), { radius, limit });
+      return computeSmoothedTrends(await archiveFor(kind), { radius, limit });
     },
 
-    mistakes: async () => {
+    mistakes: async (kind) => {
       const { computeMistakes } = await import("../data/stats.js");
-      return computeMistakes(await loadAllGames());
+      return computeMistakes(await archiveFor(kind));
     },
 
     /** Engine status, from the plugin rather than a server. */

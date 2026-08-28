@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import golden from "../__fixtures__/golden-data.json";
-import { DRAW_RESULTS, normalizeGame } from "../chessCom.js";
+import { DRAW_RESULTS, GAME_KINDS, gameKind, normalizeGame } from "../chessCom.js";
 
 const ME = "maxime";
 
@@ -57,5 +57,33 @@ describe("normalizeGame", () => {
       .filter(Boolean);
     expect(new Set(rows.map((r) => r.user_color))).toEqual(new Set(["white", "black"]));
     expect(new Set(rows.map((r) => r.result))).toEqual(new Set(["win", "loss", "draw"]));
+  });
+});
+
+describe("gameKind", () => {
+  // The one rule that decides whether a game counts towards the player's real
+  // strength. It reads `rated`, so it has to give the same answer for a raw
+  // archive entry, a normalised row and a line of an old backup.
+  it("files an unrated game as training and everything else as rated", () => {
+    expect(gameKind({ rated: false })).toBe("training");
+    expect(gameKind({ rated: true })).toBe("rated");
+  });
+
+  // Chess.com omits the field on some older archives, and a game with no
+  // opinion about it is an ordinary game: defaulting the other way would empty
+  // the rated statistics for anyone with an old archive.
+  it("treats a missing or unreadable value as rated", () => {
+    expect(gameKind({})).toBe("rated");
+    expect(gameKind({ rated: undefined })).toBe("rated");
+    expect(gameKind(null)).toBe("rated");
+    expect(gameKind(undefined)).toBe("rated");
+  });
+
+  // `rated: 0` from a SQLite row is falsy but is not `false`. Reading it as
+  // "not training" would put every unrated game back in the rated average
+  // after a restore.
+  it("is written against a real boolean, and says so", () => {
+    expect(gameKind({ rated: 0 })).toBe("rated");
+    expect(GAME_KINDS).toEqual(["rated", "training"]);
   });
 });

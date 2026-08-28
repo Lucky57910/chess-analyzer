@@ -28,6 +28,25 @@ import { api } from '../utils/api'
 const PHASE_LABEL = { opening: 'Ouverture', middlegame: 'Milieu', endgame: 'Finale' }
 const axis = { fill: 'var(--color-ink-500)', fontSize: 11 }
 
+/**
+ * Which games the whole screen is about.
+ *
+ * `rated` by default. A game the player could take moves back in is not a
+ * measurement of how they play, and averaging it in quietly flatters every
+ * number here.
+ */
+const KINDS = [
+  { key: 'rated', label: 'Classées' },
+  { key: 'training', label: 'Entraînement' },
+  { key: 'all', label: 'Toutes' },
+]
+
+const KIND_NOTE = {
+  rated: 'Parties classées uniquement : celles où le résultat comptait.',
+  training: 'Parties non classées : entraîneur, ordinateur, parties amicales. Les coups repris en font partie.',
+  all: 'Tout confondu — les moyennes mêlent les parties classées et l’entraînement.',
+}
+
 const PERIODS = ['smooth', 'day', 'week', 'month']
 const PERIOD_LABEL = {
   smooth: 'Jour lissé',
@@ -174,20 +193,21 @@ export default function Stats() {
   // to see anything yet, and by day one afternoon swings the line end to end.
   const [period, setPeriod] = useState('smooth')
   const [normalise, setNormalise] = useState('game')
+  const [kind, setKind] = useState('rated')
   const [error, setError] = useState(null)
 
   // Split from the series below because neither of these depends on the
   // granularity: rebuilding them on every click of Jour/Semaine/Mois means two
   // more full passes over the archive for numbers that cannot have changed.
   useEffect(() => {
-    Promise.all([api.stats(), api.mistakes(), api.insights()])
+    Promise.all([api.stats(undefined, kind), api.mistakes(kind), api.insights({ kind })])
       .then(([s, m, i]) => {
         setStats(s)
         setMistakes(m)
         setInsights(i)
       })
       .catch((err) => setError(err.message))
-  }, [])
+  }, [kind])
 
   useEffect(() => {
     const buckets = TREND_BUCKETS[period]
@@ -195,8 +215,11 @@ export default function Stats() {
     // one pass over the archive builds them together.
     const load =
       period === 'smooth'
-        ? api.smoothedTrends(SMOOTH_RADIUS, buckets).then((series) => [series, series])
-        : Promise.all([api.trends(period, buckets), api.judgmentTrends(period, buckets)])
+        ? api.smoothedTrends(SMOOTH_RADIUS, buckets, kind).then((series) => [series, series])
+        : Promise.all([
+            api.trends(period, buckets, kind),
+            api.judgmentTrends(period, buckets, kind),
+          ])
 
     load
       .then(([t, j]) => {
@@ -204,7 +227,7 @@ export default function Stats() {
         setJudgments(j)
       })
       .catch((err) => setError(err.message))
-  }, [period])
+  }, [period, kind])
 
   if (error) return <p className="text-sm text-blunder">{error}</p>
   if (!stats) return <p className="text-sm text-ink-500">Chargement…</p>
@@ -226,7 +249,24 @@ export default function Stats() {
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-xl font-semibold">Statistiques</h1>
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <h1 className="text-xl font-semibold">Statistiques</h1>
+        <div className="flex gap-2">
+          {KINDS.map(({ key, label }) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setKind(key)}
+              className={`rounded-md px-2.5 py-1 text-xs ${
+                key === kind ? 'bg-ink-700 text-ink-100' : 'text-ink-500 hover:bg-ink-800'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <p className="-mt-4 text-xs text-ink-500">{KIND_NOTE[kind]}</p>
 
       <StatsSummary stats={stats} comparison={insights?.comparison} />
 

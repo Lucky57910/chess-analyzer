@@ -106,6 +106,30 @@ function pgnHeaders(pgn) {
   }
 }
 
+/**
+ * The two kinds of game, and the whole of the rule that tells them apart.
+ *
+ * `training` is everything that does not measure the player's real strength:
+ * games against the coach or a bot, and casual games. They still get analysed
+ * and reviewed - the point of the split is that they do not sit in the same
+ * average as rated play, where the result stood for something.
+ *
+ * The rule is `rated`, which Chess.com sends with every archived game and this
+ * app has stored since the first version. It reads that one field, so it works
+ * on a raw archive entry, on a normalised row and on a line of an old backup
+ * alike - which is why the kind is filed at insert time rather than in
+ * `normalizeGame`, whose output is compared field for field to a recording of
+ * the Python backend and cannot gain one. It is a necessary condition rather
+ * than a guess: a game the player can take moves back in cannot be rated. It
+ * is not a sufficient one - a casual game against a human lands here too - and
+ * this is the one function to change if a sharper marker turns up in the data.
+ */
+export const GAME_KINDS = ["rated", "training"];
+
+export function gameKind(raw) {
+  return raw?.rated === false ? "training" : "rated";
+}
+
 /** Chess.com puts the opening in ECOUrl, e.g. .../openings/Sicilian-Defense-Najdorf. */
 function openingName(headers) {
   if (headers.Opening) return headers.Opening.slice(0, 160);

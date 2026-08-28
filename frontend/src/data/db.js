@@ -88,7 +88,7 @@ export async function migrate(driver, steps = MIGRATIONS) {
   }
 
   for (const step of pendingMigrations(current, steps)) {
-    if (step.run) await step.run(driver);
+    if (step.run) await step.run(driver, { addColumn });
     else await driver.execute(step.sql);
     await driver.execute(`PRAGMA user_version = ${step.version}`);
   }

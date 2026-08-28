@@ -12,6 +12,7 @@
  * same thing on two devices.
  */
 
+import { gameKind } from "./chessCom.js";
 import { JSON_COLUMNS, SCHEMA_VERSION } from "./schema.js";
 
 export const BACKUP_FORMAT = 1;
@@ -36,6 +37,7 @@ const GAME_COLUMNS = [
   "time_class",
   "time_control",
   "rated",
+  "game_kind",
   "eco",
   "opening",
   "played_at",
@@ -196,9 +198,14 @@ export async function importBackup(repo, payload) {
     if (existing) {
       skipped += 1;
     } else {
-      const values = GAME_COLUMNS.map((column) =>
-        column === "rated" ? (entry.rated ? 1 : 0) : fill(entry, column),
-      );
+      const values = GAME_COLUMNS.map((column) => {
+        if (column === "rated") return entry.rated ? 1 : 0;
+        // A backup written before the column existed still carries `rated`,
+        // which is what the rule reads, so an old file restores classified
+        // rather than landing wholesale in the rated pile.
+        if (column === "game_kind") return entry.game_kind ?? gameKind(entry);
+        return fill(entry, column);
+      });
       const { changes } = await repo.run(
         `INSERT INTO games (${GAME_COLUMNS.join(", ")})
          VALUES (${GAME_COLUMNS.map(() => "?").join(", ")})`,

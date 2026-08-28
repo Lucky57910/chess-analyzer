@@ -443,3 +443,44 @@ describe("the archive fingerprint", () => {
     expect(typeof (await empty.store.fingerprint())).toBe("string");
   });
 });
+
+describe("filing a game as rated or training", () => {
+  let ctx;
+  beforeEach(async () => {
+    ctx = await freshStore();
+  });
+
+  // The kind is decided on the way in rather than by the normaliser, whose
+  // output is pinned to a recording of the Python backend. This is the test
+  // that the wiring in between actually happened.
+  it("classifies on insert, from the row's own rated flag", async () => {
+    const rated = ROWS.find((row) => row.rated);
+    const casual = ROWS.find((row) => !row.rated);
+    expect(casual, "the fixtures need an unrated game").toBeDefined();
+
+    await ctx.store.upsertMany([rated, casual]);
+    const rows = await ctx.store.listWithAnalyses();
+    const byId = Object.fromEntries(rows.map((r) => [r.chess_com_game_id, r.game_kind]));
+
+    expect(byId[rated.chess_com_game_id]).toBe("rated");
+    expect(byId[casual.chess_com_game_id]).toBe("training");
+  });
+
+  it("never leaves the column empty, whatever the row said", async () => {
+    await ctx.store.upsertMany(ROWS);
+    const empty = await ctx.repo.one(
+      "SELECT COUNT(*) AS n FROM games WHERE game_kind IS NULL OR game_kind = ''",
+    );
+    expect(empty.n).toBe(0);
+  });
+
+  it("lists one kind at a time", async () => {
+    await ctx.store.upsertMany(ROWS);
+    const training = await ctx.store.list({ limit: 100, kind: "training" });
+    const rated = await ctx.store.list({ limit: 100, kind: "rated" });
+
+    expect(training.total + rated.total).toBe(ROWS.length);
+    expect(training.total).toBeGreaterThan(0);
+    expect(training.games.every((g) => g.game_kind === "training")).toBe(true);
+  });
+});

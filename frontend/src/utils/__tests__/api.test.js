@@ -222,8 +222,9 @@ describe("stats", () => {
     };
     await ctx.store.upsertMany([old]);
 
-    const all = await ctx.api.stats();
-    const window = await ctx.api.stats(7);
+    // "all", because this is about the window, not about the rated split.
+    const all = await ctx.api.stats(undefined, "all");
+    const window = await ctx.api.stats(7, "all");
     expect(all.games).toBe(ROWS.length + 1);
     expect(window.games).toBe(ROWS.length);
   });
@@ -378,12 +379,12 @@ describe("loading the archive", () => {
   });
 
   it("reloads once a sync brings a game in", async () => {
-    await ctx.api.stats();
+    await ctx.api.stats(undefined, "all");
     await ctx.store.upsertMany([
       { ...ROWS[0], chess_com_game_id: "arrived-later", end_time: ROWS[0].end_time + 1 },
     ]);
 
-    const after = await ctx.api.stats();
+    const after = await ctx.api.stats(undefined, "all");
     expect(ctx.spy.archiveLoads()).toBe(2);
     expect(after.games).toBe(ROWS.length + 1);
   });
@@ -503,5 +504,76 @@ describe("backup", () => {
   it("refuses a file that is not one of ours", async () => {
     const ctx = await fixture();
     await expect(ctx.api.importBackup({ app: "other" })).rejects.toThrow(/Chess Analyzer/);
+  });
+});
+
+describe("splitting rated play from training", () => {
+  let ctx;
+  beforeEach(async () => {
+    ctx = await fixture();
+    // Half the archive becomes training, and only the rated half is analysed,
+    // so a leak in either direction changes a number rather than nothing.
+    const games = await ctx.api.games({ limit: 100 });
+    const half = Math.floor(games.length / 2);
+    for (const game of games.slice(0, half)) {
+      await ctx.repo.run("UPDATE games SET game_kind = 'training' WHERE id = ?", [game.id]);
+    }
+    for (const game of games.slice(half)) {
+      await ctx.store.saveAnalysis(game.id, analysisResult());
+    }
+    ctx.spy.reset();
+  });
+
+  const kinds = async () =>
+    (await ctx.repo.all("SELECT game_kind, COUNT(*) AS n FROM games GROUP BY game_kind")).reduce(
+      (out, row) => ({ ...out, [row.game_kind]: row.n }),
+      {},
+    );
+
+  it("counts only rated games by default", async () => {
+    const counts = await kinds();
+    const stats = await ctx.api.stats();
+    expect(stats.games).toBe(counts.rated);
+    expect(stats.games).toBeLessThan(ROWS.length);
+  });
+
+  it("counts the training games when asked for them, and everything for 'all'", async () => {
+    const counts = await kinds();
+    expect((await ctx.api.stats(undefined, "training")).games).toBe(counts.training);
+    expect((await ctx.api.stats(undefined, "all")).games).toBe(ROWS.length);
+  });
+
+  // Splitting must not undo the cached archive: filtering happens on the copy
+  // already in memory, so switching the tab is free rather than another load.
+  it("narrows the copy it already holds rather than reloading", async () => {
+    await ctx.api.stats(undefined, "rated");
+    await ctx.api.stats(undefined, "training");
+    await ctx.api.stats(undefined, "all");
+    await ctx.api.insights({ kind: "training" });
+    expect(ctx.spy.archiveLoads()).toBe(1);
+  });
+
+  it("carries the split into every statistic, not just the summary", async () => {
+    for (const method of ["trends", "judgmentTrends"]) {
+      const rated = await ctx.api[method]("month", 24, "rated");
+      const all = await ctx.api[method]("month", 24, "all");
+      const total = (points) => points.reduce((n, p) => n + p.games, 0);
+      expect(total(all)).toBe(ROWS.length);
+      expect(total(rated)).toBeLessThan(total(all));
+    }
+
+    const smoothed = await ctx.api.smoothedTrends(3, 400, "all");
+    expect(smoothed.reduce((n, p) => n + p.games, 0)).toBe(ROWS.length);
+  });
+
+  it("lists one kind at a time on the games screen", async () => {
+    const counts = await kinds();
+    const training = await ctx.api.gamesPage({ limit: 100, kind: "training" });
+    expect(training.total).toBe(counts.training);
+    expect(training.games.every((game) => game.game_kind === "training")).toBe(true);
+
+    // The field reaches the row the list renders, which is what draws the badge.
+    const all = await ctx.api.gamesPage({ limit: 100 });
+    expect(all.games.some((game) => game.game_kind === "training")).toBe(true);
   });
 });
