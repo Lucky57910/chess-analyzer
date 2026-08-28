@@ -119,10 +119,16 @@ function pgnHeaders(pgn) {
  * on a raw archive entry, on a normalised row and on a line of an old backup
  * alike - which is why the kind is filed at insert time rather than in
  * `normalizeGame`, whose output is compared field for field to a recording of
- * the Python backend and cannot gain one. It is a necessary condition rather
- * than a guess: a game the player can take moves back in cannot be rated. It
- * is not a sufficient one - a casual game against a human lands here too - and
- * this is the one function to change if a sharper marker turns up in the data.
+ * the Python backend and cannot gain one.
+ *
+ * Checked against a real archive of 227 games rather than assumed: the unrated
+ * games were exactly the games whose PGN says `[Event "Play vs Coach"]`, all 33
+ * of them against the same account, and nothing else in the archive was
+ * unrated. The Event header is the more literal marker, and this is not it on
+ * purpose - any coach or computer mode is unrated, so `rated` keeps working
+ * when Chess.com adds another one under a different name. It errs only towards
+ * being too broad, and too broad here means keeping a game that was not played
+ * for a rating out of the average that stands for the player's rating.
  */
 export const GAME_KINDS = ["rated", "training"];
 

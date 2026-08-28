@@ -474,3 +474,39 @@ describe("computeInsights", () => {
     expect(insights.session_tilt).toEqual([]);
   });
 });
+
+// Two time-control strings taken from a real archive. Both would ruin the
+// clock statistics if they were parsed as a running clock, and neither is a
+// value anyone would think to invent.
+describe("time controls that turned up in a real archive", () => {
+  it("ignores a coach game, which reports no time control at all", () => {
+    expect(timeControl("-")).toBe(null);
+    const times = moveTimes({
+      user_color: "white",
+      time_control: "-",
+      pgn: '[Event "Play vs Coach"]\n\n1. e4 e5 1-0',
+      analysis: { moves: [] },
+    });
+    expect(times).toEqual([]);
+  });
+
+  // A correspondence game does carry clock tags, and they count down days.
+  // Read as thinking time, one of them puts hours into the median and the
+  // "blunders played in under ten seconds" figure collapses.
+  it("ignores a correspondence game even though it has clocks", () => {
+    expect(timeControl("1/259200")).toBe(null);
+    const times = moveTimes({
+      user_color: "white",
+      time_control: "1/259200",
+      pgn: '[Event "Let\'s Play!"]\n\n1. e4 {[%clk 71:59:59]} e5 {[%clk 71:58:00]} 1-0',
+      analysis: { moves: [] },
+    });
+    expect(times).toEqual([]);
+  });
+
+  it("still reads the live formats that archive used", () => {
+    expect(timeControl("600")).toEqual({ base: 600, increment: 0 });
+    expect(timeControl("1800")).toEqual({ base: 1800, increment: 0 });
+    expect(timeControl("900+10")).toEqual({ base: 900, increment: 10 });
+  });
+});

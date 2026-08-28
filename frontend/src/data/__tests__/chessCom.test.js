@@ -87,3 +87,32 @@ describe("gameKind", () => {
     expect(GAME_KINDS).toEqual(["rated", "training"]);
   });
 });
+
+// Shapes copied from a real Chess.com archive rather than invented, because
+// the awkward values here are ones no reasonable person would guess: a coach
+// game reports its time control as "-", and a correspondence game carries
+// clock tags whose readings are days rather than thinking time.
+describe("what the real archive actually looks like", () => {
+  const coachGame = {
+    rules: "chess",
+    rated: false,
+    time_class: "daily",
+    time_control: "-",
+    uuid: "coach-1",
+    end_time: 1_787_000_000,
+    white: { username: "MaximeSalou", rating: 1200, result: "win" },
+    black: { username: "Coach-David", rating: null, result: "checkmated" },
+    pgn: '[Event "Play vs Coach"]\n[White "MaximeSalou"]\n[Black "Coach-David"]\n\n1. e4 e5 1-0\n',
+  };
+
+  it("files a game against the coach as training", () => {
+    expect(gameKind(coachGame)).toBe("training");
+    expect(normalizeGame(coachGame, "MaximeSalou").opponent_username).toBe("Coach-David");
+  });
+
+  // Every rated game in that archive was rated, and every unrated one was a
+  // coach game: the rule and the Event header picked out the same 33 games.
+  it("files an ordinary live game as rated", () => {
+    expect(gameKind({ ...coachGame, rated: true, time_control: "600" })).toBe("rated");
+  });
+});
