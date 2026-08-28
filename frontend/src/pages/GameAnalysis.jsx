@@ -4,8 +4,10 @@ import Board from '../components/Board'
 import EvalBar from '../components/EvalBar'
 import EvalGraph from '../components/EvalGraph'
 import MoveList from '../components/MoveList'
+import Sparring from '../components/Sparring'
 import { StatTile } from '../components/StatsSummary'
 import { useMediaQuery } from '../hooks/useMediaQuery'
+import { useQueue } from '../hooks/useQueue'
 import { motifsFor } from '../engine/motifs.js'
 import { api } from '../utils/api'
 import {
@@ -130,7 +132,9 @@ export default function GameAnalysis() {
   const [bestPeekPly, setBestPeekPly] = useState(null)
   const [error, setError] = useState(null)
   const [showGraph, setShowGraph] = useState(false)
+  const [sparringFrom, setSparringFrom] = useState(null)
   const isDesktop = useMediaQuery('(min-width: 1024px)')
+  const { running: queueRunning, stop: stopQueue } = useQueue()
   const touchStart = useRef(null)
 
   const load = useCallback(async () => {
@@ -339,6 +343,15 @@ export default function GameAnalysis() {
         {/* Board first and pinned: scrolling the move list or the mistake
             timeline must never push the position off screen. */}
         <section className="sticky top-0 z-20 order-1 -mx-4 flex flex-col gap-2 border-b border-ink-800 bg-ink-950 px-4 pb-2 lg:static lg:z-auto lg:order-none lg:col-start-1 lg:row-start-1 lg:mx-0 lg:border-0 lg:px-0 lg:pb-0">
+          {sparringFrom ? (
+            <Sparring
+              startFen={sparringFrom}
+              orientation={orientation}
+              color={userColor}
+              onExit={() => setSparringFrom(null)}
+            />
+          ) : (
+          <>
           <div
             className="mx-auto flex w-full max-w-[min(46vh,30rem)] touch-pan-y gap-2 lg:max-w-[min(52vh,30rem)]"
             onTouchStart={onTouchStart}
@@ -372,6 +385,18 @@ export default function GameAnalysis() {
               ⇅<span className="hidden sm:inline"> Retourner</span>
             </NavButton>
             <NavButton
+              onClick={() => {
+                // The engine has one search state and the driver serialises
+                // every call, so a rally queued behind a whole game's analysis
+                // would wait minutes for its first reply.
+                if (queueRunning) stopQueue()
+                setSparringFrom(fen)
+              }}
+              title="Reprenez la position et jouez la suite contre Stockfish."
+            >
+              ♟<span className="hidden sm:inline"> Jouer d’ici</span>
+            </NavButton>
+            <NavButton
               onClick={() => setBestPeekPly(showingBest ? null : ply)}
               disabled={!bestAvailable}
               title={
@@ -390,7 +415,9 @@ export default function GameAnalysis() {
           </div>
 
           {/* What the move did, in words. The judgment above says a move was
-              bad; this says what about it was. */}
+              bad; this says what about it was. Belongs to the game being
+              reviewed, so it goes with the rest of it when the board is handed
+              over to a rally. */}
           {motifs.length > 0 && (
             <ul className="flex flex-col gap-0.5 text-xs">
               {motifs.map((motif) => (
@@ -399,6 +426,8 @@ export default function GameAnalysis() {
                 </li>
               ))}
             </ul>
+          )}
+          </>
           )}
         </section>
 

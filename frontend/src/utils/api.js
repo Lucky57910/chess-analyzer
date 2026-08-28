@@ -238,6 +238,18 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
       return computeMistakes(await archiveFor(kind));
     },
 
+    /**
+     * One position, evaluated now.
+     *
+     * The analysis queue drives the engine through `sync`; this is the other
+     * caller, for playing a position out by hand. Both end up in the driver's
+     * own queue, so they cannot interleave - but they do wait for each other,
+     * which is why the screen that uses this stops the queue first.
+     */
+    async evaluate(fen, limit) {
+      return engine.evaluate(fen, limit);
+    },
+
     /** Engine status, from the plugin rather than a server. */
     async health() {
       try {

@@ -95,6 +95,10 @@ vi.mock("../utils/api", () => {
       total: 12,
     })),
     sync: vi.fn(async () => ({ imported: 0, updated: 0, skipped: 0, pending_analysis: 3 })),
+    // Answers like the UCI driver: White's point of view, plus the move it
+    // would play. The reply is always the first legal move, which is enough
+    // for the board to move and keeps the fixture from needing a real search.
+    evaluate: vi.fn(async () => ({ cp: 15, mate: null, best_uci: "e7e5", depth: 12 })),
     health: vi.fn(async () => ({
       engine: { available: true, name: "Stockfish 17.1", path: "/x" },
       engine_depth: 18,
@@ -759,6 +763,57 @@ describe("saying what a move did", () => {
     fireEvent.keyDown(window, { key: "ArrowRight" });
     await waitFor(() => expect(screen.queryByText(/Roque/)).toBe(null));
     expect(screen.queryByText(/fourchette/)).toBe(null);
+  });
+});
+
+describe("playing the position out", () => {
+  // The analysis says what should have been played. This is the question that
+  // follows it and that a move list cannot answer.
+  it("hands the board over and plays the engine's reply", async () => {
+    const base = await api.game();
+    api.game.mockResolvedValue({ ...base, pgn: "1. d4 d5 *" });
+    renderApp("/games/1");
+
+    fireEvent.click(await screen.findByRole("button", { name: /Jouer d’ici/ }));
+    expect(await screen.findByRole("button", { name: "Revenir à l’analyse" })).toBeDefined();
+    expect(api.evaluate).not.toHaveBeenCalled();
+  });
+
+  // Stockfish has one search state and the driver serialises every call, so a
+  // rally queued behind a whole game's analysis waits minutes for its first
+  // reply. Taking the board means taking the engine.
+  it("stops the analysis queue before taking the engine", async () => {
+    let aborted = false;
+    const { sync } = await getApi();
+    sync.runQueue.mockImplementation(
+      ({ signal }) =>
+        new Promise((resolve) => {
+          signal.addEventListener("abort", () => {
+            aborted = true;
+            resolve(0);
+          });
+        }),
+    );
+
+    // Started from the home screen, which is where the queue is offered, then
+    // into a game from the card that links to one - the route a user takes.
+    renderApp("/");
+    fireEvent.click(await screen.findByRole("button", { name: "Analyser" }));
+    await waitFor(() => expect(sync.runQueue).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("link", { name: /La dernière erreur à rejouer/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Jouer d’ici/ }));
+
+    // The runner only resolves when its signal aborts, so the rally starting
+    // is what ended it.
+    await waitFor(() => expect(aborted).toBe(true));
+  });
+
+  it("gives the board back on the way out", async () => {
+    renderApp("/games/1");
+    fireEvent.click(await screen.findByRole("button", { name: /Jouer d’ici/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Revenir à l’analyse" }));
+    expect(await screen.findByRole("button", { name: /Jouer d’ici/ })).toBeDefined();
   });
 });
 
