@@ -83,9 +83,19 @@ export function createGameStore(repo) {
     },
 
     /** Newest first, with the filters the games list offers. */
-    async list({ limit = 50, offset = 0, result, timeClass, color, status } = {}) {
+    async list({ limit = 50, offset = 0, result, timeClass, color, status, search } = {}) {
       const clauses = [];
       const values = [];
+      const term = search?.trim();
+      if (term) {
+        // `%` and `_` are wildcards to LIKE, and an opponent's name is user
+        // input: without the escape, searching for "_" matches every game.
+        const like = `%${term.replaceAll(/[\\%_]/g, (c) => `\\${c}`)}%`;
+        clauses.push(
+          "(opponent_username LIKE ? ESCAPE '\\' OR IFNULL(opening, '') LIKE ? ESCAPE '\\')",
+        );
+        values.push(like, like);
+      }
       if (result) {
         clauses.push("result = ?");
         values.push(result);

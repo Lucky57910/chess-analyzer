@@ -203,6 +203,43 @@ describe("stats", () => {
     expect(window.games).toBe(ROWS.length);
   });
 
+  it("pages the archive and says how big the whole set is", async () => {
+    const first = await ctx.api.gamesPage({ limit: 2, offset: 0 });
+    expect(first.games.length).toBe(2);
+    expect(first.total).toBe(ROWS.length);
+
+    const wider = await ctx.api.gamesPage({ limit: 4, offset: 0 });
+    expect(wider.games.slice(0, 2).map((g) => g.id)).toEqual(first.games.map((g) => g.id));
+
+    // The total is the size of the filtered set, not of the page.
+    const losses = await ctx.api.gamesPage({ limit: 1, result: "loss" });
+    expect(losses.total).toBe(ROWS.filter((r) => r.result === "loss").length);
+    expect(losses.total).toBeGreaterThan(losses.games.length);
+  });
+
+  it("searches the opponent and the opening from one box", async () => {
+    const [any] = await ctx.api.games({ limit: 1 });
+
+    const byOpponent = await ctx.api.gamesPage({
+      limit: 100,
+      search: any.opponent_username.slice(1, 4),
+    });
+    expect(byOpponent.games.length).toBeGreaterThan(0);
+    for (const game of byOpponent.games) {
+      const haystack = `${game.opponent_username} ${game.opening ?? ""}`.toLowerCase();
+      expect(haystack).toContain(any.opponent_username.slice(1, 4).toLowerCase());
+    }
+
+    expect((await ctx.api.gamesPage({ limit: 100, search: "zzzz-nobody" })).total).toBe(0);
+  });
+
+  // `%` and `_` are LIKE wildcards, and the search box is user input. Unescaped,
+  // a single underscore matches every game and the empty state never appears.
+  it("treats LIKE wildcards as characters, not as patterns", async () => {
+    expect((await ctx.api.gamesPage({ limit: 100, search: "%" })).total).toBe(0);
+    expect((await ctx.api.gamesPage({ limit: 100, search: "_" })).total).toBe(0);
+  });
+
   it("serves trends and mistakes in the shapes the charts expect", async () => {
     const trends = await ctx.api.trends("week", 5);
     expect(Array.isArray(trends)).toBe(true);
@@ -213,6 +250,22 @@ describe("stats", () => {
     const mistakes = await ctx.api.mistakes();
     expect(mistakes).toHaveProperty("worst_moves");
     expect(mistakes).toHaveProperty("by_move_number");
+  });
+
+  // The judgment series is normalised by the user's own move count, which is
+  // read off the stored analysis. If that read comes back empty over a real
+  // database, every rate silently becomes null and the chart draws nothing.
+  it("counts moves off the stored analysis for the judgment series", async () => {
+    const points = await ctx.api.judgmentTrends("week", 20);
+    expect(points.length).toBeGreaterThan(0);
+
+    const analysed = points.filter((p) => p.analysed > 0);
+    expect(analysed.length).toBeGreaterThan(0);
+    for (const point of analysed) {
+      expect(point.moves).toBeGreaterThan(0);
+      expect(point.blunders_per_100).not.toBe(null);
+      expect(point.blunders_per_game).not.toBe(null);
+    }
   });
 });
 

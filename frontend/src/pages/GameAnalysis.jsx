@@ -22,7 +22,9 @@ const SWIPE_MIN_PX = 30
 const ACCURACY_NOTE =
   'Modèle Lichess : moyenne des coups pondérée par la volatilité de la position, ' +
   'mélangée à leur moyenne harmonique. Chess.com utilise CAPS2, qui est propriétaire ' +
-  'et analyse plus profondément — quelques points d’écart sont normaux.'
+  'et analyse plus profondément — quelques points d’écart sont normaux. ' +
+  'Le « cp » est le centipion : 100 cp = 1 pion. À 30 cp perdus par coup, vous ' +
+  'cédez l’équivalent d’un pion tous les trois coups.'
 const RESULT_LABEL = { win: 'Victoire', loss: 'Défaite', draw: 'Nulle' }
 
 function NavButton({ children, ...props }) {
@@ -78,7 +80,10 @@ export default function GameAnalysis() {
   const [ply, setPly] = useState(0)
   const [flipped, setFlipped] = useState(false)
   const [playing, setPlaying] = useState(false)
-  const [showBest, setShowBest] = useState(false)
+  // The ply the engine move was asked for, not a boolean: a peek belongs to one
+  // position. Storing the ply makes "stop showing it when the user moves on"
+  // fall out of the comparison instead of needing an effect to undo it.
+  const [bestPeekPly, setBestPeekPly] = useState(null)
   const [error, setError] = useState(null)
   const [showGraph, setShowGraph] = useState(false)
   const isDesktop = useMediaQuery('(min-width: 1024px)')
@@ -176,9 +181,11 @@ export default function GameAnalysis() {
   const userColor = game.user_color
   const orientation = flipped ? (userColor === 'white' ? 'black' : 'white') : userColor
 
-  // "Meilleur coup" rewinds one ply and draws the engine move as an arrow.
+  // "Voir le meilleur coup" rewinds one ply and draws the engine move as an
+  // arrow. It is a peek, not a mode: walking to another ply drops it, because
+  // `bestPeekPly` no longer matches.
   const bestAvailable = Boolean(current?.best_move_uci) && !current?.is_best
-  const showingBest = showBest && bestAvailable
+  const showingBest = bestPeekPly === ply && bestAvailable
   const fen = showingBest
     ? (previous?.fen_after ?? START_FEN)
     : (current?.fen_after ?? START_FEN)
@@ -202,7 +209,7 @@ export default function GameAnalysis() {
   // Our number and Chess.com's come from different models, so show both rather
   // than pretend they should match.
   const accuracyHint = [
-    acpl != null ? `${acpl} cp / coup` : null,
+    acpl != null ? `${acpl} cp perdus / coup` : null,
     game.chess_com_accuracy != null ? `Chess.com ${game.chess_com_accuracy.toFixed(1)}%` : null,
   ]
     .filter(Boolean)
@@ -301,8 +308,18 @@ export default function GameAnalysis() {
             <NavButton onClick={() => setFlipped(!flipped)}>
               ⇅<span className="hidden sm:inline"> Retourner</span>
             </NavButton>
-            <NavButton onClick={() => setShowBest(!showBest)} disabled={!bestAvailable}>
-              {showingBest ? 'Coup joué' : 'Meilleur coup'}
+            <NavButton
+              onClick={() => setBestPeekPly(showingBest ? null : ply)}
+              disabled={!bestAvailable}
+              title={
+                bestAvailable
+                  ? 'Affiche le coup que Stockfish jouait ici. Revient au coup joué dès que vous avancez.'
+                  : current?.is_best
+                    ? 'Vous avez joué le meilleur coup ici.'
+                    : 'Rien à comparer sur cette position.'
+              }
+            >
+              {showingBest ? 'Revenir au coup joué' : 'Voir le meilleur coup'}
             </NavButton>
             <span className="ml-auto font-mono text-sm text-ink-300">
               {ply} / {moves.length} · {formatEval(current)}

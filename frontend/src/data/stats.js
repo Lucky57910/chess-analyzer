@@ -156,31 +156,138 @@ function bucketOf(game, period) {
   return `${iso.year}-W${String(iso.week).padStart(2, "0")}`;
 }
 
-export function computeTrends(games, { period = "week", limit = 12 } = {}) {
+/**
+ * Short axis label for a bucket key.
+ *
+ * The keys `bucketOf` produces are built to sort, not to read: `2026-08-14`,
+ * `2026-W33`, `2026-08`. Lives here rather than in the chart because the shape
+ * being parsed is the one produced four lines up - the two drift together or
+ * not at all.
+ */
+export function formatBucket(key, period) {
+  if (typeof key !== "string") return key;
+  if (period === "day") {
+    const [, month, day] = key.split("-");
+    return month && day ? `${day}/${month}` : key;
+  }
+  if (period === "week") {
+    const week = key.split("-W")[1];
+    return week ? `S${week}` : key;
+  }
+  const [year, month] = key.split("-");
+  return month ? `${month}/${year.slice(2)}` : key;
+}
+
+/** The last `limit` buckets, oldest first, as `[key, games]` pairs. */
+function bucketed(games, period, limit) {
   const grouped = new Map();
   for (const game of games) {
     const key = bucketOf(game, period);
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push(game);
   }
-
-  const defined = (value) => value !== null && value !== undefined;
   return [...grouped.keys()]
     .sort()
     .slice(-limit)
-    .map((key) => {
-      const group = grouped.get(key);
-      const wins = group.filter((g) => g.result === "win").length;
-      const draws = group.filter((g) => g.result === "draw").length;
-      const stats = group.map((g) => mine(g)).filter(Boolean);
-      return {
-        period: key,
-        games: group.length,
-        win_rate: rate(wins, draws, group.length),
-        avg_accuracy: mean(stats.map((m) => m.accuracy).filter(defined), 1),
-        avg_acpl: mean(stats.map((m) => m.acpl).filter(defined), 1),
-      };
-    });
+    .map((key) => [key, grouped.get(key)]);
+}
+
+export function computeTrends(games, { period = "week", limit = 12 } = {}) {
+  const defined = (value) => value !== null && value !== undefined;
+  return bucketed(games, period, limit).map(([key, group]) => {
+    const wins = group.filter((g) => g.result === "win").length;
+    const draws = group.filter((g) => g.result === "draw").length;
+    const stats = group.map((g) => mine(g)).filter(Boolean);
+    return {
+      period: key,
+      games: group.length,
+      win_rate: rate(wins, draws, group.length),
+      avg_accuracy: mean(stats.map((m) => m.accuracy).filter(defined), 1),
+      avg_acpl: mean(stats.map((m) => m.acpl).filter(defined), 1),
+    };
+  });
+}
+
+/**
+ * How many moves the user themself played in a game, or null if unknown.
+ *
+ * Two sources, because they are not always both there. A stored analysis
+ * carries the whole move list, which can be counted exactly; the golden
+ * fixtures carry only the aggregates the Python emitted, and a game analysed
+ * before the move list existed carries `moves_evaluated`, a ply count covering
+ * both sides. Halving that is exact rather than approximate: White plays the
+ * odd plies, Black the even ones.
+ */
+export function myMoveCount(game) {
+  const analysis = game.analysis;
+  if (!analysis) return null;
+
+  const moves = analysis.moves;
+  if (Array.isArray(moves) && moves.length) {
+    return moves.filter((m) => m.color === game.user_color).length;
+  }
+
+  const plies = analysis.moves_evaluated;
+  if (!plies) return null;
+  return game.user_color === "white" ? Math.ceil(plies / 2) : Math.floor(plies / 2);
+}
+
+/**
+ * Blunders, mistakes and inaccuracies over time - the thing that decides games
+ * at club level, and the one series `computeTrends` cannot carry.
+ *
+ * It is a separate function rather than three more fields on `computeTrends`
+ * because that one is pinned to a recording of the Python backend that no
+ * longer exists to regenerate it. Adding a key there breaks the oracle with no
+ * way to re-derive it, so the new numbers live here and are held to their own
+ * tests.
+ *
+ * Two normalisations, because neither alone is honest: per game is what the
+ * player feels, but a 25-move loss and an 80-move grind are not comparable, so
+ * per 100 of the user's own moves is what actually shows a trend.
+ */
+export function computeJudgmentTrends(games, { period = "week", limit = 12 } = {}) {
+  return bucketed(games, period, limit).map(([key, group]) => {
+    const totals = Object.fromEntries(JUDGMENTS.map((j) => [j, 0]));
+    // Counted apart from the totals: a game whose move count is unknown must
+    // not put its blunders in the numerator of a rate its moves are missing
+    // from, which would inflate the rate exactly when data is thin.
+    const counted = Object.fromEntries(JUDGMENTS.map((j) => [j, 0]));
+    let analysed = 0;
+    let moves = 0;
+
+    for (const game of group) {
+      const m = mine(game);
+      if (!m) continue;
+      analysed += 1;
+      const played = myMoveCount(game);
+      for (const j of JUDGMENTS) {
+        const n = m.counts[j] ?? 0;
+        totals[j] += n;
+        if (played) counted[j] += n;
+      }
+      if (played) moves += played;
+    }
+
+    const perGame = (n) => (analysed ? roundTo(n / analysed, 2) : null);
+    const per100 = (n) => (moves ? roundTo((100 * n) / moves, 2) : null);
+
+    return {
+      period: key,
+      games: group.length,
+      analysed,
+      moves: moves || null,
+      blunders: totals.blunder,
+      mistakes: totals.mistake,
+      inaccuracies: totals.inaccuracy,
+      blunders_per_game: perGame(totals.blunder),
+      mistakes_per_game: perGame(totals.mistake),
+      inaccuracies_per_game: perGame(totals.inaccuracy),
+      blunders_per_100: per100(counted.blunder),
+      mistakes_per_100: per100(counted.mistake),
+      inaccuracies_per_100: per100(counted.inaccuracy),
+    };
+  });
 }
 
 /** Where the damage happens: worst moves and the move numbers they cluster on. */

@@ -70,15 +70,29 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
       return this.settings();
     },
 
-    async games(params = {}) {
-      const { games } = await store.list({
+    /**
+     * One page of games, with the size of the whole filtered set beside it.
+     *
+     * The list screen needs both: without the total it cannot say "25 of 342"
+     * and cannot know whether there is another page to offer. `store.list` has
+     * always returned it - the flat-array facade was throwing it away.
+     */
+    async gamesPage(params = {}) {
+      const { games, total } = await store.list({
         limit: params.limit ?? 20,
         offset: params.offset ?? 0,
         result: params.result,
         timeClass: params.time_class,
         color: params.color,
+        status: params.status,
+        search: params.search,
       });
-      return games.map(flatten);
+      return { games: games.map(flatten), total };
+    },
+
+    /** The same page, as the flat array the screens were written against. */
+    async games(params = {}) {
+      return (await this.gamesPage(params)).games;
     },
 
     async game(id) {
@@ -151,6 +165,11 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
     trends: async (period = "week", limit = 12) => {
       const { computeTrends } = await import("../data/stats.js");
       return computeTrends(await loadAllGames(), { period, limit });
+    },
+
+    judgmentTrends: async (period = "week", limit = 12) => {
+      const { computeJudgmentTrends } = await import("../data/stats.js");
+      return computeJudgmentTrends(await loadAllGames(), { period, limit });
     },
 
     mistakes: async () => {
