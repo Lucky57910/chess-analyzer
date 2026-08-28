@@ -15,6 +15,7 @@ import golden from "../__fixtures__/golden-data.json";
 import { normalizeGame } from "../chessCom.js";
 import { createRepository, hydrate, migrate, nodeDriver } from "../db.js";
 import { createGameStore, MAX_ANALYSIS_ATTEMPTS } from "../games.js";
+import { SCHEMA_VERSION } from "../schema.js";
 import { createSync, SETTING_USERNAME } from "../sync.js";
 
 const ME = "maxime";
@@ -53,16 +54,19 @@ function analysisResult(overrides = {}) {
   };
 }
 
+// The runner itself is exercised in migrate.test.js; these two only check
+// that the store's own fixture comes up migrated, since every query below
+// assumes it.
 describe("migrate", () => {
-  it("stamps a version so a later migration has a floor", async () => {
+  it("leaves the fixture at the current schema version", async () => {
     const { repo } = await freshStore();
     const { values } = await repo.driver.query("PRAGMA user_version");
-    expect(values[0].user_version).toBe(1);
+    expect(values[0].user_version).toBe(SCHEMA_VERSION);
   });
 
   it("is safe to run twice", async () => {
     const { repo } = await freshStore();
-    await expect(migrate(repo.driver)).resolves.toBe(1);
+    await expect(migrate(repo.driver)).resolves.toBe(SCHEMA_VERSION);
   });
 });
 

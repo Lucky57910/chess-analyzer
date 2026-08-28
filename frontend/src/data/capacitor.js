@@ -14,7 +14,7 @@ import { createStockfish } from "../engine/stockfish.js";
 import { createClient } from "./chessCom.js";
 import { createRepository, migrate } from "./db.js";
 import { createGameStore } from "./games.js";
-import { SCHEMA_VERSION } from "./schema.js";
+import { DATABASE_VERSION } from "./schema.js";
 
 export const DATABASE_NAME = "chess-analyzer";
 
@@ -45,7 +45,16 @@ export async function openDatabase() {
   const connection =
     consistent.result && existing.result
       ? await sqlite.retrieveConnection(DATABASE_NAME, false)
-      : await sqlite.createConnection(DATABASE_NAME, false, "no-encryption", SCHEMA_VERSION, false);
+      : // Deliberately not the schema version: this number drives the plugin's
+        // own upgrade path, and we run our own migrations against
+        // `PRAGMA user_version`. See DATABASE_VERSION in schema.js.
+        await sqlite.createConnection(
+          DATABASE_NAME,
+          false,
+          "no-encryption",
+          DATABASE_VERSION,
+          false,
+        );
 
   await connection.open();
   const driver = capacitorDriver(connection);

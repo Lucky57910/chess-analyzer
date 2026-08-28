@@ -11,8 +11,29 @@
  * repository parses on the way out so callers never see the encoding.
  */
 
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
+/**
+ * The version handed to the SQLite plugin, which is not our schema version.
+ *
+ * `createConnection` takes a version and drives the plugin's own upgrade
+ * machinery from it. We do our own migrations against `PRAGMA user_version`,
+ * so this stays where it was when the first database was created: asking the
+ * plugin for a version above the one it recorded, with no upgrade statement
+ * registered, is how you get an app that refuses to open its database on a
+ * phone and nowhere else.
+ */
+export const DATABASE_VERSION = 1;
+
+/**
+ * The version 1 schema, frozen.
+ *
+ * Every statement is `IF NOT EXISTS`, so this is the creation script on a new
+ * database and a no-op on an existing one. It is deliberately not kept up to
+ * date: a baseline that drifts while the migrations also change means new
+ * installs and old ones stop agreeing, and the difference only shows up on
+ * somebody's phone. Anything after version 1 is a step in `MIGRATIONS`.
+ */
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS settings (
   key   TEXT PRIMARY KEY,
@@ -81,3 +102,35 @@ CREATE TABLE IF NOT EXISTS analyses (
 
 /** Columns holding JSON, parsed on read and stringified on write. */
 export const JSON_COLUMNS = ["moves", "errors", "blunders", "judgment_counts", "phase_stats"];
+
+/**
+ * Everything that has happened to the schema since version 1.
+ *
+ * Ordered, applied once each, and stamped one at a time so an interrupted
+ * upgrade resumes where it stopped rather than starting over. Three rules,
+ * because the database on the phone is the only copy of analyses that took it
+ * hours to compute:
+ *
+ *   1. **Every step is idempotent.** The version is stamped after the step
+ *      succeeds, not with it, so a process killed in between re-runs the step
+ *      on the next launch. `IF NOT EXISTS`, or `addColumn`, which looks first.
+ *   2. **A new column is nullable or has a default.** Restoring a backup
+ *      inserts the columns the file knew about and nothing else, so a NOT NULL
+ *      column with no default makes every older backup unrestorable.
+ *   3. **Nothing here drops or rewrites a column.** Adding is reversible by
+ *      ignoring it; a downgrade after a rewrite is not reversible at all, and
+ *      this app is sideloaded, so downgrades happen.
+ *
+ * A step is `{ version, name }` plus either `sql` to execute or `run(driver)`
+ * for anything that has to look at the database first.
+ */
+export const MIGRATIONS = [
+  {
+    version: 2,
+    name: "index the analyses timestamp",
+    // The archive cache checks `MAX(updated_at)` on every statistics call to
+    // decide whether the copy it holds is still good. Without an index that is
+    // a scan of the widest table in the database; with one it is a lookup.
+    sql: `CREATE INDEX IF NOT EXISTS ix_analyses_updated ON analyses (updated_at);`,
+  },
+];

@@ -22,6 +22,7 @@ import {
 import { normalizeGame } from "../chessCom.js";
 import { createRepository, migrate, nodeDriver } from "../db.js";
 import { createGameStore } from "../games.js";
+import { SCHEMA_VERSION } from "../schema.js";
 import { SETTING_USERNAME } from "../sync.js";
 
 const ME = "maxime";
@@ -257,5 +258,50 @@ describe("validateBackup", () => {
     const { repo, store } = await populated();
     await expect(importBackup(repo, { app: "elsewhere" })).rejects.toThrow();
     expect(await store.count()).toBe(ROWS.length);
+  });
+});
+
+describe("restoring across a schema change", () => {
+  // A backup written by an older release names the columns that existed then.
+  // Restoring it into a newer schema has to work, which is what makes "a new
+  // column is nullable or has a default" a rule for migrations rather than a
+  // preference: a NOT NULL column with no default would make every backup this
+  // user has ever taken unrestorable, and the analyses in them are the only
+  // copy there is.
+  it("takes an export written before the current schema existed", async () => {
+    const { repo, store } = await populated();
+    const older = await exportBackup(repo);
+    older.schema_version = 1;
+
+    const target = await freshStore();
+    const result = await importBackup(target.repo, older);
+
+    expect(result.games).toBe(ROWS.length);
+    expect(result.analyses).toBe(1);
+    expect(await target.store.count()).toBe(ROWS.length);
+  });
+
+  // The column lists in this file are explicit, so a file from a newer schema
+  // would restore by quietly dropping what it knew and this version does not.
+  // Losing part of a backup in silence is worse than refusing it.
+  it("refuses an export from a newer schema instead of dropping what it cannot read", async () => {
+    const { repo } = await populated();
+    const newer = await exportBackup(repo);
+    newer.schema_version = SCHEMA_VERSION + 1;
+
+    expect(() => validateBackup(newer)).toThrow(/plus récent/);
+
+    const target = await freshStore();
+    await expect(importBackup(target.repo, newer)).rejects.toThrow();
+    expect(await target.store.count()).toBe(0);
+  });
+
+  it("still accepts a file that never said which schema it came from", async () => {
+    const { repo } = await populated();
+    const anonymous = await exportBackup(repo);
+    delete anonymous.schema_version;
+
+    const target = await freshStore();
+    expect((await importBackup(target.repo, anonymous)).games).toBe(ROWS.length);
   });
 });

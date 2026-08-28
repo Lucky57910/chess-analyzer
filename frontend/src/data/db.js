@@ -14,7 +14,7 @@
  * @property {(sql: string, values?: unknown[]) => Promise<{changes: {changes: number, lastId: number}}>} run
  */
 
-import { JSON_COLUMNS, SCHEMA, SCHEMA_VERSION } from "./schema.js";
+import { JSON_COLUMNS, MIGRATIONS, SCHEMA, SCHEMA_VERSION } from "./schema.js";
 
 /** Parse the JSON-bearing columns of a row, leaving everything else alone. */
 export function hydrate(row) {
@@ -36,14 +36,67 @@ export function hydrate(row) {
   return out;
 }
 
-export async function migrate(driver) {
-  await driver.execute(SCHEMA);
+async function userVersion(driver) {
   const { values } = await driver.query("PRAGMA user_version");
-  const current = values?.[0]?.user_version ?? 0;
-  if (current < SCHEMA_VERSION) {
-    // No migration steps yet - the schema above is version 1 and is created
-    // whole. This records the version so the first real migration has a floor
-    // to work from rather than having to guess what shipped.
+  return values?.[0]?.user_version ?? 0;
+}
+
+/**
+ * Add a column if the table does not already have it.
+ *
+ * SQLite has no `ADD COLUMN IF NOT EXISTS`, and a migration step has to be
+ * safe to re-run: the version is stamped after the step, so a process killed
+ * in between runs it again. Looking first is the whole trick.
+ */
+export async function addColumn(driver, table, column, definition) {
+  const { values } = await driver.query(`PRAGMA table_info(${table})`);
+  if ((values ?? []).some((row) => row.name === column)) return false;
+  await driver.execute(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  return true;
+}
+
+/** The steps still to apply, in order, given the version on disk. */
+export function pendingMigrations(current, steps = MIGRATIONS) {
+  return steps.filter((step) => step.version > current).sort((a, b) => a.version - b.version);
+}
+
+/**
+ * Bring the database up to `SCHEMA_VERSION`.
+ *
+ * The baseline is created first and is version 1 throughout, so a new database
+ * and one installed a year ago meet at the same place and walk the same steps
+ * from there. Each step is applied and then stamped, separately and in that
+ * order: if the app is killed between the two the step runs again on the next
+ * launch, which is why every step has to be idempotent. Stamping first would
+ * skip a step that never actually ran.
+ *
+ * A database from a newer version of the app is refused rather than written
+ * to. This app is sideloaded, so a downgrade is a thing that happens, and the
+ * local database is the only copy of analyses that cost hours of phone.
+ */
+export async function migrate(driver, steps = MIGRATIONS) {
+  await driver.execute(SCHEMA);
+
+  const current = await userVersion(driver);
+  if (current > SCHEMA_VERSION) {
+    throw new Error(
+      `Cette base de données vient d’une version plus récente de l’application ` +
+        `(schéma ${current}, cette version en gère ${SCHEMA_VERSION}). ` +
+        `Réinstallez la version la plus récente : ouvrir la base avec cette version-ci ` +
+        `l’abîmerait.`,
+    );
+  }
+
+  for (const step of pendingMigrations(current, steps)) {
+    if (step.run) await step.run(driver);
+    else await driver.execute(step.sql);
+    await driver.execute(`PRAGMA user_version = ${step.version}`);
+  }
+
+  // A database that was already current still gets stamped, which is what
+  // carries a version-1 install with no steps to run up to today.
+  const reached = await userVersion(driver);
+  if (reached < SCHEMA_VERSION) {
     await driver.execute(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   }
   return SCHEMA_VERSION;

@@ -147,6 +147,15 @@ export function validateBackup(payload) {
       `Sauvegarde au format ${payload.format} : trop récente pour cette version de l’application.`,
     );
   }
+  // The column lists here are explicit, so a file from a newer schema restores
+  // by quietly dropping whatever it knew that this version does not. Quietly
+  // losing part of a backup is worse than refusing it.
+  if (Number.isInteger(payload.schema_version) && payload.schema_version > SCHEMA_VERSION) {
+    throw new Error(
+      `Sauvegarde issue d’un schéma ${payload.schema_version}, plus récent que celui de ` +
+        `cette version (${SCHEMA_VERSION}). Mettez l’application à jour avant de la restaurer.`,
+    );
+  }
   if (!Array.isArray(payload.games)) {
     throw new Error("Sauvegarde incomplète : aucune liste de parties.");
   }
