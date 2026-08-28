@@ -172,6 +172,18 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
       return computeJudgmentTrends(await loadAllGames(), { period, limit });
     },
 
+    /**
+     * The second layer of statistics, in one pass over the archive.
+     *
+     * Deliberately one method rather than eight. Every method here re-reads
+     * every game and every analysis, so a call per panel would be eight passes
+     * over the database to draw one screen.
+     */
+    insights: async (options) => {
+      const { computeInsights } = await import("../data/insights.js");
+      return computeInsights(await loadAllGames(), options);
+    },
+
     mistakes: async () => {
       const { computeMistakes } = await import("../data/stats.js");
       return computeMistakes(await loadAllGames());

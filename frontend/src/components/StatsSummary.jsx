@@ -46,8 +46,37 @@ export const JUDGMENT_NOTE =
   `à partir de ${MISTAKE_CP} cp une erreur, ` +
   `à partir de ${BLUNDER_CP} cp — trois pions — une gaffe.`
 
-export default function StatsSummary({ stats }) {
+/**
+ * The change against the previous window of the same length.
+ *
+ * A headline number with nothing beside it cannot answer the only question the
+ * tiles are asked, which is whether things are getting better. Direction
+ * matters per field: more accuracy is progress, more blunders is not.
+ */
+function Delta({ value, unit = '', goodWhen = 'up' }) {
+  if (value === null || value === undefined || value === 0) return null
+  const better = goodWhen === 'up' ? value > 0 : value < 0
+  return (
+    <span className={better ? 'text-good' : 'text-blunder'}>
+      {value > 0 ? '▲' : '▼'} {Math.abs(value)}
+      {unit}
+    </span>
+  )
+}
+
+function withDelta(hint, delta) {
+  if (!delta) return hint
+  return (
+    <span className="flex flex-wrap items-baseline gap-x-2">
+      {delta}
+      {hint && <span>{hint}</span>}
+    </span>
+  )
+}
+
+export default function StatsSummary({ stats, comparison }) {
   if (!stats) return null
+  const d = comparison?.deltas ?? {}
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
       <StatTile
@@ -58,14 +87,20 @@ export default function StatsSummary({ stats }) {
       <StatTile
         label="Score"
         value={`${stats.win_rate}%`}
-        hint={`${stats.wins}V · ${stats.draws}N · ${stats.losses}D`}
+        hint={withDelta(
+          `${stats.wins}V · ${stats.draws}N · ${stats.losses}D`,
+          <Delta value={d.win_rate} unit=" pts" />,
+        )}
         title={SCORE_NOTE}
         tone={stats.win_rate >= 50 ? 'good' : 'default'}
       />
       <StatTile
         label="Précision moy."
         value={stats.avg_accuracy != null ? `${stats.avg_accuracy}%` : null}
-        hint={stats.avg_acpl != null ? `${stats.avg_acpl} cp perdus / coup` : undefined}
+        hint={withDelta(
+          stats.avg_acpl != null ? `${stats.avg_acpl} cp perdus / coup` : undefined,
+          <Delta value={d.avg_accuracy} unit=" pts" />,
+        )}
         title={`${ACCURACY_NOTE} ${CP_NOTE}`}
         tone={stats.avg_accuracy >= 85 ? 'good' : stats.avg_accuracy >= 70 ? 'warn' : 'bad'}
       />
@@ -73,11 +108,10 @@ export default function StatsSummary({ stats }) {
         label="Gaffes / partie"
         value={stats.blunders_per_game}
         title={`${JUDGMENT_NOTE} ${CP_NOTE}`}
-        hint={
-          stats.weakest_phase
-            ? `Phase faible : ${PHASE_LABEL[stats.weakest_phase]}`
-            : undefined
-        }
+        hint={withDelta(
+          stats.weakest_phase ? `Phase faible : ${PHASE_LABEL[stats.weakest_phase]}` : undefined,
+          <Delta value={d.blunders_per_game} goodWhen="down" />,
+        )}
         tone={stats.blunders_per_game <= 0.5 ? 'good' : stats.blunders_per_game <= 1.5 ? 'warn' : 'bad'}
       />
     </div>

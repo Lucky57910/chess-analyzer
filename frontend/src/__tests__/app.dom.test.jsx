@@ -143,6 +143,56 @@ vi.mock("../utils/api", () => {
         { move_number: 23, count: 5 },
       ],
     })),
+    insights: vi.fn(async () => ({
+      by_rating_gap: [
+        { key: "even", name: "Équivalent (−50 à +50)", games: 8, win_rate: 50, avg_accuracy: 80 },
+      ],
+      costly_mistakes: [
+        {
+          game_id: 1,
+          opponent: "rival",
+          move_number: 14,
+          ply: 27,
+          san: "Nd5",
+          best_move_san: "Bd2",
+          cp_loss: 260,
+          judgment: "mistake",
+          phase: "middlegame",
+          eval_cp_before: 20,
+        },
+      ],
+      conversion: {
+        winning_positions: 6,
+        converted: 4,
+        conversion_rate: 66.7,
+        losing_positions: 5,
+        saved: 1,
+        save_rate: 20,
+      },
+      by_piece: [{ piece: "Q", name: "Dame", moves: 40, avg_cp_loss: 61.2, blunders: 3 }],
+      opening_exit: [{ name: "Sicilian Defense", games: 4, moves: 40, acpl: 22.5, win_rate: 50 }],
+      session_tilt: [
+        { rank: 1, name: "1ʳᵉ", games: 6, win_rate: 66.7, avg_accuracy: 84, blunders_per_game: 0.5 },
+      ],
+      clock: {
+        games: 9,
+        moves: 300,
+        blunders: 8,
+        median_seconds: 6.4,
+        fast_blunders: 6,
+        fast_blunder_share: 75,
+        buckets: [
+          { key: "instant", name: "moins de 5 s", moves: 120, blunders: 5, blunder_rate: 4.2 },
+          { key: "slow", name: "plus de 30 s", moves: 40, blunders: 0, blunder_rate: 0 },
+        ],
+      },
+      comparison: {
+        days: 30,
+        current: { games: 10, win_rate: 60, avg_accuracy: 82, blunders_per_game: 0.6 },
+        previous: { games: 8, win_rate: 50, avg_accuracy: 78, blunders_per_game: 1.1 },
+        deltas: { win_rate: 10, avg_accuracy: 4, blunders_per_game: -0.5, avg_acpl: -3 },
+      },
+    })),
     game: vi.fn(async () => ({
       id: 1,
       user_color: "white",
@@ -244,7 +294,10 @@ function renderApp(route = "/") {
 // test installed, so one `mockResolvedValue` would quietly follow the suite
 // around. Anything a test overrides has to be put back here.
 const DEFAULTS = new Map(
-  ["gamesPage", "settings", "health"].map((name) => [name, api[name].getMockImplementation()]),
+  ["gamesPage", "settings", "health", "insights"].map((name) => [
+    name,
+    api[name].getMockImplementation(),
+  ]),
 );
 
 beforeEach(() => {
@@ -442,6 +495,48 @@ describe("the stats page", () => {
 
     expect(api.stats).toHaveBeenCalledTimes(1);
     expect(api.mistakes).toHaveBeenCalledTimes(1);
+  });
+
+  // Frequent opponents counted one or two games per name in a pool that pairs
+  // at random, then printed a win rate over them.
+  it("has replaced the frequent-opponents table with the rating gap", async () => {
+    renderApp("/stats");
+    expect(await screen.findByText("Par écart de classement")).toBeDefined();
+    expect(screen.queryByText("Adversaires fréquents")).toBe(null);
+  });
+
+  it("ranks the mistakes that were played from a live position", async () => {
+    renderApp("/stats");
+    expect(await screen.findByText("Les coups qui vous ont coûté la partie")).toBeDefined();
+    expect(await screen.findByText("Nd5")).toBeDefined();
+    expect(screen.queryByText("Vos pires coups")).toBe(null);
+  });
+
+  it("shows the clock panel when the games carry clocks", async () => {
+    renderApp("/stats");
+    expect(await screen.findByText("Le temps et les gaffes")).toBeDefined();
+    expect(await screen.findByText("75%")).toBeDefined();
+  });
+
+  // A table of zeroes would claim every move was instant, which is worse than
+  // saying nothing.
+  it("leaves the clock panel out entirely when no game carries one", async () => {
+    const base = await api.insights();
+    api.insights.mockResolvedValue({ ...base, clock: null });
+    renderApp("/stats");
+    expect(await screen.findByText("Par écart de classement")).toBeDefined();
+    expect(screen.queryByText("Le temps et les gaffes")).toBe(null);
+  });
+
+  it("puts the headline numbers against the previous window", async () => {
+    renderApp("/stats");
+    expect(await screen.findByText(/comparent les 30 derniers jours/)).toBeDefined();
+    // Fewer blunders is progress, so that arrow points down and reads as good;
+    // more accuracy is progress, so that one points up and reads the same way.
+    const fewerBlunders = await screen.findByText(/▼ 0\.5/);
+    expect(fewerBlunders.className).toContain("text-good");
+    const moreAccuracy = await screen.findByText(/▲ 4 pts/);
+    expect(moreAccuracy.className).toContain("text-good");
   });
 
   it("counts blunders per game or per hundred moves, on demand", async () => {

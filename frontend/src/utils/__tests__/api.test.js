@@ -240,6 +240,24 @@ describe("stats", () => {
     expect((await ctx.api.gamesPage({ limit: 100, search: "_" })).total).toBe(0);
   });
 
+  // Everything here is derived from the stored analysis rather than from the
+  // game row, so an empty result over a real database means a field was read
+  // under the wrong name - which looks exactly like "nothing to report".
+  it("derives the second layer from what is actually stored", async () => {
+    const insights = await ctx.api.insights();
+
+    expect(insights.by_rating_gap.reduce((n, r) => n + r.games, 0)).toBeGreaterThan(0);
+    expect(insights.by_piece.length).toBeGreaterThan(0);
+    expect(insights.by_piece.reduce((n, r) => n + r.moves, 0)).toBeGreaterThan(0);
+    expect(insights.comparison.current.games).toBeGreaterThan(0);
+    expect(insights.session_tilt.length).toBeGreaterThan(0);
+    expect(insights.conversion).toHaveProperty("conversion_rate");
+
+    // The fixture PGNs carry no clock tags, so this must be absent rather than
+    // a row of zeroes claiming every move was instant.
+    expect(insights.clock).toBe(null);
+  });
+
   it("serves trends and mistakes in the shapes the charts expect", async () => {
     const trends = await ctx.api.trends("week", 5);
     expect(Array.isArray(trends)).toBe(true);

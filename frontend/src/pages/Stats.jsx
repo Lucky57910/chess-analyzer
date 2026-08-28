@@ -19,6 +19,7 @@ import StatsSummary, {
   CP_NOTE,
   JUDGMENT_NOTE,
   SCORE_NOTE,
+  StatTile,
 } from '../components/StatsSummary'
 import { formatBucket } from '../data/stats.js'
 import { JUDGMENT_CLASS, JUDGMENT_LABEL } from '../utils/chess'
@@ -74,6 +75,54 @@ function Panel({ title, hint, children, className = '' }) {
   )
 }
 
+function Section({ title, subtitle }) {
+  return (
+    <div className="mt-2">
+      <h2 className="text-lg font-semibold text-ink-100">{title}</h2>
+      <p className="text-sm text-ink-500">{subtitle}</p>
+    </div>
+  )
+}
+
+/** A generic three-column table: label, count, and one number that matters. */
+function SimpleTable({ rows, head, cells, empty = 'Pas assez de données.' }) {
+  if (!rows?.length) return <p className="px-4 py-4 text-sm text-ink-500">{empty}</p>
+  return (
+    <table className="w-full text-sm">
+      <thead>
+        <tr className="text-xs uppercase tracking-wide text-ink-500">
+          {head.map((label, i) => (
+            <th
+              key={label}
+              className={`py-2 font-normal ${i === 0 ? 'px-4 text-left' : 'px-2 text-right'}`}
+            >
+              {label}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-ink-800">
+        {rows.map((row, i) => (
+          <tr key={row.key ?? row.name ?? i}>
+            {cells(row).map((value, j) => (
+              <td
+                key={j}
+                className={`py-2 ${
+                  j === 0
+                    ? 'max-w-0 truncate px-4 text-ink-100'
+                    : 'px-2 text-right tabular-nums text-ink-300'
+                }`}
+              >
+                {value}
+              </td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  )
+}
+
 function BreakdownTable({ rows }) {
   if (!rows?.length) return <p className="px-4 py-4 text-sm text-ink-500">Pas de données.</p>
   return (
@@ -111,6 +160,7 @@ export default function Stats() {
   const [trends, setTrends] = useState([])
   const [judgments, setJudgments] = useState([])
   const [mistakes, setMistakes] = useState(null)
+  const [insights, setInsights] = useState(null)
   const [period, setPeriod] = useState('week')
   const [normalise, setNormalise] = useState('game')
   const [error, setError] = useState(null)
@@ -119,10 +169,11 @@ export default function Stats() {
   // granularity: rebuilding them on every click of Jour/Semaine/Mois means two
   // more full passes over the archive for numbers that cannot have changed.
   useEffect(() => {
-    Promise.all([api.stats(), api.mistakes()])
-      .then(([s, m]) => {
+    Promise.all([api.stats(), api.mistakes(), api.insights()])
+      .then(([s, m, i]) => {
         setStats(s)
         setMistakes(m)
+        setInsights(i)
       })
       .catch((err) => setError(err.message))
   }, [])
@@ -159,7 +210,45 @@ export default function Stats() {
     <div className="flex flex-col gap-6">
       <h1 className="text-xl font-semibold">Statistiques</h1>
 
-      <StatsSummary stats={stats} />
+      <StatsSummary stats={stats} comparison={insights?.comparison} />
+
+      {insights?.comparison && (
+        <p className="text-xs text-ink-500">
+          Les flèches comparent les {insights.comparison.days} derniers jours aux{' '}
+          {insights.comparison.days} précédents
+          {insights.comparison.previous
+            ? ` (${insights.comparison.current.games} parties contre ${insights.comparison.previous.games}).`
+            : ' — pas encore de période précédente à comparer.'}
+        </p>
+      )}
+
+      {/* Accuracy says how well the moves were played; these two say whether it
+          mattered. Reaching winning positions and not converting them is a
+          different problem from never reaching them. */}
+      {insights?.conversion?.winning_positions > 0 && (
+        <div className="grid grid-cols-2 gap-3">
+          <StatTile
+            label="Conversion"
+            value={
+              insights.conversion.conversion_rate != null
+                ? `${insights.conversion.conversion_rate}%`
+                : null
+            }
+            hint={`${insights.conversion.converted} gagnées sur ${insights.conversion.winning_positions} positions gagnantes`}
+            title="Part des parties où vous avez atteint +2 pions d’avantage et qui se sont terminées par une victoire."
+            tone={insights.conversion.conversion_rate >= 80 ? 'good' : 'warn'}
+          />
+          <StatTile
+            label="Résilience"
+            value={
+              insights.conversion.save_rate != null ? `${insights.conversion.save_rate}%` : null
+            }
+            hint={`${insights.conversion.saved} sauvées sur ${insights.conversion.losing_positions} positions perdues`}
+            title="Part des parties où vous êtes tombé à −2 pions et que vous n’avez pas perdues."
+            tone={insights.conversion.save_rate >= 20 ? 'good' : 'default'}
+          />
+        </div>
+      )}
 
       {/* One control for both time series below: two panels reading the same
           granularity from a button row buried in the first one reads as a
@@ -313,6 +402,10 @@ export default function Stats() {
         </div>
       </Panel>
 
+      <Section
+        title="Où vous perdez des points"
+        subtitle="Ce que coûtent vos coups, et dans quelles conditions ils partent de travers."
+      />
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel
           title="Ce que vos coups coûtent, par phase de la partie"
@@ -349,6 +442,82 @@ export default function Stats() {
           </div>
         </Panel>
 
+        {/* Chess.com ships a clock reading per move inside the PGN, which the
+            importer already stores whole. The panel is absent rather than
+            empty when no game carries one — a table of zeroes would claim
+            every move was instant. */}
+        {insights?.clock && (
+          <Panel
+            title="Le temps et les gaffes"
+            hint={`Temps médian par coup : ${insights.clock.median_seconds} s, sur ${insights.clock.games} parties chronométrées.`}
+          >
+            {insights.clock.fast_blunder_share != null && (
+              <p className="px-4 pt-3 text-sm text-ink-300">
+                <span
+                  className={
+                    insights.clock.fast_blunder_share >= 50 ? 'text-blunder' : 'text-ink-100'
+                  }
+                >
+                  {insights.clock.fast_blunder_share}%
+                </span>{' '}
+                de vos gaffes sont jouées en moins de 10 secondes
+                {' '}({insights.clock.fast_blunders} sur {insights.clock.blunders}).
+              </p>
+            )}
+            <SimpleTable
+              rows={insights.clock.buckets}
+              head={['Temps sur le coup', 'Coups', 'Gaffes', '% gaffes']}
+              cells={(row) => [
+                row.name,
+                row.moves,
+                row.blunders,
+                row.blunder_rate != null ? `${row.blunder_rate}%` : '—',
+              ]}
+            />
+          </Panel>
+        )}
+
+        <Panel
+          title="Par pièce déplacée"
+          hint="Perte moyenne selon la pièce que vous bougez. Désigne souvent une habitude plutôt qu’une partie."
+        >
+          <SimpleTable
+            rows={insights?.by_piece}
+            head={['Pièce', 'Coups', 'Perte moy.', 'Gaffes']}
+            cells={(row) => [row.name, row.moves, `${row.avg_cp_loss} cp`, row.blunders]}
+          />
+        </Panel>
+
+        <Panel
+          title="Sortie d’ouverture"
+          hint="Ce que coûtent vos 12 premiers coups. Sortez-vous vivant de votre répertoire ?"
+        >
+          <SimpleTable
+            rows={insights?.opening_exit}
+            head={['Ouverture', 'Parties', 'Perte moy.', 'Score']}
+            cells={(row) => [row.name, row.games, `${row.acpl} cp`, `${row.win_rate}%`]}
+            empty="Il faut au moins deux parties dans une même ouverture."
+          />
+        </Panel>
+      </div>
+
+      <Section
+        title="Contre qui, et avec quoi"
+        subtitle="Les mêmes résultats découpés par adversaire, cadence, couleur et répertoire."
+      />
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* This replaces the frequent-opponents table. Pairing is close to
+            random, so that one counted one or two games per name and then
+            printed a win rate over them — noise with the formatting of a
+            statistic. A rating gap asks the same question of a sample big
+            enough to answer it. */}
+        <Panel
+          title="Par écart de classement"
+          hint="Perdez-vous contre des joueurs que vous devriez battre ?"
+        >
+          <BreakdownTable rows={insights?.by_rating_gap} />
+        </Panel>
+
         <Panel title="Par cadence">
           <BreakdownTable rows={stats.by_time_class} />
         </Panel>
@@ -362,8 +531,20 @@ export default function Stats() {
           />
         </Panel>
 
-        <Panel title="Adversaires fréquents">
-          <BreakdownTable rows={stats.top_opponents} />
+        <Panel
+          title="Rang dans la session"
+          hint="Parties espacées de moins de 30 min. Si la 4ᵉ est pire que la 1ʳᵉ, le remède est une habitude, pas une idée d’échecs."
+        >
+          <SimpleTable
+            rows={insights?.session_tilt}
+            head={['Partie', 'Nombre', 'Score', 'Gaffes / partie']}
+            cells={(row) => [
+              row.name,
+              row.games,
+              `${row.win_rate}%`,
+              row.blunders_per_game ?? '—',
+            ]}
+          />
         </Panel>
 
         <Panel title="Ouvertures" className="lg:col-span-2">
@@ -439,13 +620,16 @@ export default function Stats() {
         </Panel>
       ) : null}
 
+      {/* The old list ranked on centipawns lost alone, so it filled with moves
+          played from already-lost positions: a −900 from −1200 teaches nothing
+          and outranked the −250 that threw a level game. */}
       <Panel
-        title="Vos pires coups"
-        hint="Triés par nombre de centipions perdus, toutes parties confondues."
+        title="Les coups qui vous ont coûté la partie"
+        hint="Votre pire coup par partie, et seulement ceux joués dans une position encore jouable."
       >
-        {mistakes?.worst_moves?.length ? (
+        {insights?.costly_mistakes?.length ? (
           <ul className="divide-y divide-ink-800">
-            {mistakes.worst_moves.slice(0, 12).map((m, i) => (
+            {insights.costly_mistakes.map((m, i) => (
               <li key={`${m.game_id}-${m.ply}-${i}`}>
                 <Link
                   to={`/games/${m.game_id}`}
