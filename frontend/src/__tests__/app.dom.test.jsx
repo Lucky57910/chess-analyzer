@@ -281,6 +281,25 @@ vi.mock("../utils/api", () => {
           judgment: null,
           phase: "opening",
         },
+        // A judged move carrying what the driver now keeps: the line the
+        // engine wanted, and the line that punishes what was played.
+        {
+          ply: 3,
+          move_number: 2,
+          color: "white",
+          san: "Qh5",
+          uci: "d1h5",
+          eval_cp: -300,
+          eval_mate: null,
+          best_move_san: "Nf3",
+          best_move_uci: "g1f3",
+          is_best: false,
+          cp_loss: 330,
+          judgment: "blunder",
+          phase: "opening",
+          best_line: ["g1f3", "b8c6"],
+          reply_line: ["b8c6", "g1f3"],
+        },
         {
           ply: 2,
           move_number: 1,
@@ -763,6 +782,35 @@ describe("saying what a move did", () => {
     fireEvent.keyDown(window, { key: "ArrowRight" });
     await waitFor(() => expect(screen.queryByText(/Roque/)).toBe(null));
     expect(screen.queryByText(/fourchette/)).toBe(null);
+  });
+});
+
+describe("explaining a move with the engine's own line", () => {
+  // A piece is not lost on the move that hangs it, it is lost two plies later.
+  // That half needs the variation, which the driver now keeps.
+  it("replays what the opponent does next", async () => {
+    const base = await api.game();
+    api.game.mockResolvedValue({ ...base, pgn: "1. e4 e5 2. Qh5 Nc6 *" });
+    renderApp("/games/1");
+    await screen.findByRole("button", { name: /meilleur coup/ });
+
+    for (let i = 0; i < 3; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(await screen.findByText(/L’adversaire enchaîne Nc6 Nf3/)).toBeDefined();
+    expect(await screen.findByText(/Il fallait jouer Nf3 Nc6/)).toBeDefined();
+  });
+
+  // Everything analysed before the driver kept variations has none of this,
+  // and the app is not going to re-analyse hours of phone time to get it.
+  it("says nothing at all on a move analysed before lines were stored", async () => {
+    const base = await api.game();
+    api.game.mockResolvedValue({ ...base, pgn: "1. e4 e5 2. Qh5 Nc6 *" });
+    renderApp("/games/1");
+    await screen.findByRole("button", { name: /meilleur coup/ });
+
+    // Ply 1 is judged as nothing and carries no line.
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() => expect(screen.queryByText(/L’adversaire enchaîne/)).toBe(null));
+    expect(screen.queryByText(/Il fallait jouer/)).toBe(null);
   });
 });
 

@@ -189,6 +189,16 @@ export async function analysePgn(pgn, options) {
       accuracy: roundTo(moveAccuracy(winBefore, winAfter), 1),
       judgment: judgmentFor(cpLoss),
       phase: meta[i].phase,
+      // The two lines that explain a bad move: what the engine wanted instead,
+      // and how the opponent punishes what was played. Attached only to moves
+      // that were actually judged - everywhere else nothing reads them, and
+      // they would be stored on every ply of every game for nothing.
+      //
+      // Conditional rather than nulled, so a run whose evaluations carry no
+      // variation - the recorded Python calls, which never had one - produces
+      // exactly the object it always did.
+      ...(judgmentFor(cpLoss) && before.pv?.length > 1 ? { best_line: before.pv } : {}),
+      ...(judgmentFor(cpLoss) && after.pv?.length ? { reply_line: after.pv } : {}),
     };
   });
 

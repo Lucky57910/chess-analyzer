@@ -18,6 +18,9 @@ import { MATE_CP } from "./scoring.js";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
+/** Plies of the principal variation worth keeping. */
+export const PV_PLIES = 4;
+
 /** `score cp 43` / `score mate -2`, relative to the side to move. */
 function parseScore(tokens, whiteToMove) {
   const at = tokens.indexOf("score");
@@ -54,12 +57,18 @@ function parseInfo(line, whiteToMove) {
   const depthAt = tokens.indexOf("depth");
   const pvAt = tokens.indexOf("pv");
 
+  // The variation runs to the end of the line and can be twenty plies long.
+  // Only the first few are kept: past that it is a guess about a game nobody
+  // played, and every ply is stored on every judged move.
+  const pv = pvAt !== -1 ? tokens.slice(pvAt + 1, pvAt + 1 + PV_PLIES) : [];
+
   return {
     cp: score.cp,
     mate: score.mate,
     // python-chess reported the principal variation's first move, not the
     // `bestmove` line, and the two can disagree on the final iteration.
-    best_uci: pvAt !== -1 && tokens[pvAt + 1] ? tokens[pvAt + 1] : null,
+    best_uci: pv[0] ?? null,
+    pv,
     depth: depthAt !== -1 ? Number(tokens[depthAt + 1]) : null,
   };
 }

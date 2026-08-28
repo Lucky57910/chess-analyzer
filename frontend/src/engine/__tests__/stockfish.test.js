@@ -17,7 +17,7 @@ import { describe, expect, it, vi } from "vitest";
 import golden from "../__fixtures__/golden.json";
 import { analysePgn } from "../analyze.js";
 import { MATE_CP } from "../scoring.js";
-import { createStockfish } from "../stockfish.js";
+import { PV_PLIES, __testing, createStockfish } from "../stockfish.js";
 
 /** The UCI lines an engine would emit to report `result` for `fen`. */
 function uciFor(fen, result) {
@@ -171,6 +171,38 @@ describe("score conversion", () => {
   });
 });
 
+describe("the principal variation", () => {
+  // The taped calls only ever carry one move, so the length rule cannot be
+  // exercised through them. This is the level it belongs at anyway.
+  const parse = (line) => __testing.parseInfo(line, true);
+
+  it("keeps the first few plies of a long line and no more", () => {
+    const long =
+      "info depth 20 score cp 35 pv e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5a4 g8f6 e1g1";
+    const info = parse(long);
+    expect(info.pv).toEqual(["e2e4", "e7e5", "g1f3", "b8c6"]);
+    expect(info.pv.length).toBe(PV_PLIES);
+  });
+
+  // Short lines are kept whole: a line about to end is exactly the one worth
+  // reading, and padding it would mean inventing moves.
+  it("keeps a short line whole", () => {
+    expect(parse("info depth 12 score mate 1 pv d1h5 e8e7").pv).toEqual(["d1h5", "e8e7"]);
+  });
+
+  it("still reports the first move of the line as the move to play", () => {
+    const info = parse("info depth 20 score cp 35 pv e2e4 e7e5 g1f3");
+    expect(info.best_uci).toBe("e2e4");
+    expect(info.best_uci).toBe(info.pv[0]);
+  });
+
+  it("has an empty line and no move when the engine sent no variation", () => {
+    const info = parse("info depth 1 score cp 12");
+    expect(info.pv).toEqual([]);
+    expect(info.best_uci).toBe(null);
+  });
+});
+
 describe("driver replaying the taped games", () => {
   for (const [name, game] of Object.entries(golden.games)) {
     it(`${name} reproduces every taped evaluation`, async () => {
@@ -201,8 +233,33 @@ describe("driver replaying the taped games", () => {
         settings: game.settings,
       });
 
-      expect(result).toEqual(game.expected);
+      // The Python never recorded a principal variation, so the two lines that
+      // explain a judged move cannot be in the expectation. They are compared
+      // separately below rather than folded in: everything the oracle does
+      // cover stays compared exactly.
+      const withoutLines = {
+        ...result,
+        moves: result.moves.map(({ best_line, reply_line, ...rest }) => rest),
+      };
+      expect(withoutLines).toEqual(game.expected);
       expect(remaining(), "taped calls left unconsumed").toBe(0);
+
+      // And they are there, on the judged moves and nowhere else, read off the
+      // same taped `info ... pv ...` lines a real search sends.
+      for (const move of result.moves) {
+        if (move.judgment) continue;
+        expect(move.best_line, `${move.san} should carry no line`).toBe(undefined);
+        expect(move.reply_line, `${move.san} should carry no line`).toBe(undefined);
+      }
+      const judged = result.moves.filter((m) => m.judgment);
+      if (judged.length) {
+        const explained = judged.filter((m) => m.reply_line?.length);
+        expect(explained.length, "no judged move carried a variation").toBeGreaterThan(0);
+        for (const move of explained) {
+          expect(move.reply_line.length).toBeLessThanOrEqual(4);
+          for (const uci of move.reply_line) expect(uci).toMatch(/^[a-h][1-8][a-h][1-8][qrbn]?$/);
+        }
+      }
 
       // One `ucinewgame` for the whole game, not one per position: the shared
       // transposition table is what makes the shallow sweep affordable.

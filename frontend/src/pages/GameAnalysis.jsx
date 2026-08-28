@@ -9,6 +9,7 @@ import { StatTile } from '../components/StatsSummary'
 import { useMediaQuery } from '../hooks/useMediaQuery'
 import { useQueue } from '../hooks/useQueue'
 import { motifsFor } from '../engine/motifs.js'
+import { bestLine, lineText, refutation } from '../engine/refutation.js'
 import { api } from '../utils/api'
 import {
   JUDGMENT_CLASS,
@@ -69,6 +70,18 @@ const MOTIF_TEXT = {
     `Ce coup permet ${m.san} : une fourchette sur ${PIECE_LIST(m.targets)}.`,
   missedMate: (m) => `Il y avait mat en un avec ${m.san}.`,
 }
+
+/** What a motif found inside a variation is, said about that variation. */
+const MOMENT_TEXT = {
+  checkmate: () => 'et c’est mat',
+  fork: (m) => `une fourchette sur ${PIECE_LIST(m.targets)}`,
+  pin: (m) => `ce qui cloue ${PIECE_NAME[m.pinnedType]}`,
+  hangs: (m) => `et ${PIECE_NAME[m.victim]} tombe`,
+  promoted: () => 'et le pion passe dame',
+  passedPawn: () => 'et le pion est passé',
+}
+
+const momentText = (moment) => (moment ? MOMENT_TEXT[moment.motif.key]?.(moment.motif) : null)
 
 /** Red for what the move gave away, plain for what it achieved. */
 const MOTIF_TONE = { opponent: 'text-blunder', you: 'text-ink-300' }
@@ -179,6 +192,22 @@ export default function GameAnalysis() {
     } catch {
       // A motif is a nicety; it must never be the reason a game will not open.
       return []
+    }
+  }, [moves, ply])
+
+  // The engine's own line, replayed. Present only on judged moves of games
+  // analysed since the driver started keeping the variation - everything older
+  // simply has none, and the motifs above still stand on their own.
+  const lines = useMemo(() => {
+    const current = ply > 0 ? moves[ply - 1] : null
+    if (!current) return { refutation: null, best: null }
+    try {
+      return {
+        refutation: refutation(current, current.fen_after),
+        best: current.is_best ? null : bestLine(current, current.fen_before),
+      }
+    } catch {
+      return { refutation: null, best: null }
     }
   }, [moves, ply])
 
@@ -418,13 +447,33 @@ export default function GameAnalysis() {
               bad; this says what about it was. Belongs to the game being
               reviewed, so it goes with the rest of it when the board is handed
               over to a rally. */}
-          {motifs.length > 0 && (
+          {(motifs.length > 0 || lines.refutation || lines.best) && (
             <ul className="flex flex-col gap-0.5 text-xs">
               {motifs.map((motif) => (
                 <li key={motif.key} className={MOTIF_TONE[motif.side]}>
                   {MOTIF_TEXT[motif.key]?.(motif)}
                 </li>
               ))}
+
+              {/* What the engine says happens next. This is the half a
+                  position alone cannot give: a piece is not lost on the move
+                  that hangs it, it is lost two plies later. */}
+              {lines.refutation && (
+                <li className="text-blunder">
+                  L’adversaire enchaîne {lineText(lines.refutation.steps)}
+                  {momentText(lines.refutation.moment)
+                    ? ` : ${momentText(lines.refutation.moment)}.`
+                    : '.'}
+                </li>
+              )}
+              {lines.best && (
+                <li className="text-good">
+                  Il fallait jouer {lineText(lines.best.steps)}
+                  {momentText(lines.best.moment)
+                    ? ` : ${momentText(lines.best.moment)}.`
+                    : '.'}
+                </li>
+              )}
             </ul>
           )}
           </>
