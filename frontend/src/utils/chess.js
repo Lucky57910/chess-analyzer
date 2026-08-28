@@ -20,6 +20,11 @@ export function positionsFromPgn(pgn) {
     san: m.san,
     uci: m.lan,
     fen_after: m.after,
+    // Kept alongside so a motif can be worked out from this ply alone. The
+    // detectors compare the position before the move with the one after it,
+    // and `verbose` history already carries both plus the move itself.
+    fen_before: m.before,
+    move: m,
   }))
 }
 

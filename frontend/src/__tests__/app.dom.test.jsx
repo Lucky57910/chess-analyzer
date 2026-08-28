@@ -337,7 +337,7 @@ function renderApp(route = "/") {
 // test installed, so one `mockResolvedValue` would quietly follow the suite
 // around. Anything a test overrides has to be put back here.
 const DEFAULTS = new Map(
-  ["gamesPage", "settings", "health", "insights"].map((name) => [
+  ["gamesPage", "settings", "health", "insights", "game"].map((name) => [
     name,
     api[name].getMockImplementation(),
   ]),
@@ -714,6 +714,51 @@ describe("the stats page", () => {
     // Read off the thresholds, so a change to them cannot leave the glossary
     // quietly describing the old ones.
     expect(await screen.findByText(/à partir de 300 cp/)).toBeDefined();
+  });
+});
+
+describe("saying what a move did", () => {
+  // The judgment already says a move was bad. This says what about it was,
+  // which is the part that transfers to the next game.
+  it("names the motif under the board", async () => {
+    const base = await api.game();
+    api.game.mockResolvedValue({
+      ...base,
+      pgn: "1. e4 e5 2. Bc4 Nc6 3. Qh5 Nf6 4. Qxf7# 1-0",
+    });
+    renderApp("/games/1");
+    await screen.findByRole("button", { name: /meilleur coup/ });
+
+    for (let i = 0; i < 7; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(await screen.findByText("Échec et mat.")).toBeDefined();
+  });
+
+  // It is geometry over the PGN, not a stored field, so it works on a game
+  // analysed long before any of this existed.
+  it("needs no analysis to say it", async () => {
+    const base = await api.game();
+    api.game.mockResolvedValue({
+      ...base,
+      analysis_status: "pending",
+      pgn: "1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5 4. O-O *",
+    });
+    renderApp("/games/1");
+    await screen.findByRole("button", { name: /Ré-analyser/ });
+
+    for (let i = 0; i < 7; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(await screen.findByText(/Roque/)).toBeDefined();
+    // And it does not claim the rooks are connected: after castling here the
+    // queen still stands on d1, between them. Being right about the easy half
+    // and wrong about the other one is exactly what makes an annotation worse
+    // than none.
+    expect(screen.queryByText(/lie les tours/)).toBe(null);
+  });
+
+  it("says nothing rather than something vague on a quiet move", async () => {
+    renderApp("/games/1");
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() => expect(screen.queryByText(/Roque/)).toBe(null));
+    expect(screen.queryByText(/fourchette/)).toBe(null);
   });
 });
 

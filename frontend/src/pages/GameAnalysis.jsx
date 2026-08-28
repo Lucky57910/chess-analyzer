@@ -6,6 +6,7 @@ import EvalGraph from '../components/EvalGraph'
 import MoveList from '../components/MoveList'
 import { StatTile } from '../components/StatsSummary'
 import { useMediaQuery } from '../hooks/useMediaQuery'
+import { motifsFor } from '../engine/motifs.js'
 import { api } from '../utils/api'
 import {
   JUDGMENT_CLASS,
@@ -26,6 +27,49 @@ const ACCURACY_NOTE =
   'Le « cp » est le centipion : 100 cp = 1 pion. À 30 cp perdus par coup, vous ' +
   'cédez l’équivalent d’un pion tous les trois coups.'
 const RESULT_LABEL = { win: 'Victoire', loss: 'Défaite', draw: 'Nulle' }
+
+const PIECE_NAME = {
+  p: 'le pion',
+  n: 'le cavalier',
+  b: 'le fou',
+  r: 'la tour',
+  q: 'la dame',
+  k: 'le roi',
+}
+
+const PIECE_LIST = (targets) =>
+  targets
+    .map((t) => PIECE_NAME[t.type])
+    .join(' et ')
+    .replace('le roi', 'le roi')
+
+/**
+ * The French for a motif.
+ *
+ * Kept here rather than in the detector so that module can be tested on facts
+ * instead of on wording, and so the wording can change without touching a
+ * single thing that decides whether a motif is there at all.
+ */
+const MOTIF_TEXT = {
+  checkmate: () => 'Échec et mat.',
+  castled: (m) => (m.long ? 'Roque du côté dame.' : 'Roque, le roi est à l’abri.'),
+  promoted: () => 'Promotion.',
+  rooksConnected: () => 'Ce coup lie les tours : elles se défendent l’une l’autre.',
+  rookOpenFile: (m) => `La tour prend la colonne ${m.file}, qui est ouverte.`,
+  passedPawn: (m) => `Le pion ${m.square} est passé : plus aucun pion adverse ne peut l’arrêter.`,
+  fork: (m) => `Ce coup fait une fourchette : ${PIECE_NAME[m.piece]} attaque ${PIECE_LIST(m.targets)}.`,
+  pin: (m) => `Ce coup cloue ${PIECE_NAME[m.pinnedType]} contre ${PIECE_NAME[m.againstType]}.`,
+  hangs: (m) =>
+    m.moved
+      ? `Ce coup pose ${PIECE_NAME[m.victim]} en ${m.square} là où il peut être pris.`
+      : `Ce coup laisse ${PIECE_NAME[m.victim]} en prise en ${m.square}.`,
+  allowsFork: (m) =>
+    `Ce coup permet ${m.san} : une fourchette sur ${PIECE_LIST(m.targets)}.`,
+  missedMate: (m) => `Il y avait mat en un avec ${m.san}.`,
+}
+
+/** Red for what the move gave away, plain for what it achieved. */
+const MOTIF_TONE = { opponent: 'text-blunder', you: 'text-ink-300' }
 
 function NavButton({ children, ...props }) {
   return (
@@ -114,6 +158,25 @@ export default function GameAnalysis() {
     if (!game) return []
     return mergeMoves(positionsFromPgn(game.pgn), analysis?.moves)
   }, [game, analysis])
+
+  // Worked out for the ply on screen and nothing else. It is pure geometry
+  // over chess.js, so it costs a few positions rather than an engine call, and
+  // it works on games analysed long before this existed - nothing about it is
+  // stored.
+  const motifs = useMemo(() => {
+    const current = ply > 0 ? moves[ply - 1] : null
+    if (!current?.move) return []
+    try {
+      return motifsFor({
+        before: current.fen_before,
+        after: current.fen_after,
+        move: current.move,
+      })
+    } catch {
+      // A motif is a nicety; it must never be the reason a game will not open.
+      return []
+    }
+  }, [moves, ply])
 
   const goTo = useCallback(
     (next) => setPly(Math.max(0, Math.min(moves.length, next))),
@@ -325,6 +388,18 @@ export default function GameAnalysis() {
               {ply} / {moves.length} · {formatEval(current)}
             </span>
           </div>
+
+          {/* What the move did, in words. The judgment above says a move was
+              bad; this says what about it was. */}
+          {motifs.length > 0 && (
+            <ul className="flex flex-col gap-0.5 text-xs">
+              {motifs.map((motif) => (
+                <li key={motif.key} className={MOTIF_TONE[motif.side]}>
+                  {MOTIF_TEXT[motif.key]?.(motif)}
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
 
         <div className="order-2 h-56 rounded-lg border border-ink-800 bg-ink-900 lg:order-none lg:col-start-2 lg:row-start-1 lg:h-80">
