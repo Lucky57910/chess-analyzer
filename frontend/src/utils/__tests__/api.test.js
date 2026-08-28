@@ -258,6 +258,25 @@ describe("stats", () => {
     expect(insights.clock).toBe(null);
   });
 
+  // The smoothed view feeds both time charts from one array, so it has to
+  // carry the field names each of them reads. A missing key there draws an
+  // empty chart rather than throwing.
+  it("carries both halves of the smoothed series under one set of names", async () => {
+    const smoothed = await ctx.api.smoothedTrends(3, 60);
+    const plain = await ctx.api.trends("day", 60);
+    const judgments = await ctx.api.judgmentTrends("day", 60);
+
+    expect(smoothed.length).toBeGreaterThan(0);
+    for (const field of [...Object.keys(plain[0]), ...Object.keys(judgments[0])]) {
+      // `moves` is the only field the smoothed series has no use for.
+      if (field === "moves") continue;
+      expect(smoothed[0], `missing ${field}`).toHaveProperty(field);
+    }
+
+    // A point per calendar day, gaps included, so the axis is continuous.
+    expect(smoothed.length).toBeGreaterThanOrEqual(plain.length);
+  });
+
   it("serves trends and mistakes in the shapes the charts expect", async () => {
     const trends = await ctx.api.trends("week", 5);
     expect(Array.isArray(trends)).toBe(true);

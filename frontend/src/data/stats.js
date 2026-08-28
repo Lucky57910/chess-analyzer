@@ -166,7 +166,8 @@ function bucketOf(game, period) {
  */
 export function formatBucket(key, period) {
   if (typeof key !== "string") return key;
-  if (period === "day") {
+  // A smoothed series is still one point per calendar day.
+  if (period === "day" || period === "smooth") {
     const [, month, day] = key.split("-");
     return month && day ? `${day}/${month}` : key;
   }
@@ -288,6 +289,176 @@ export function computeJudgmentTrends(games, { period = "week", limit = 12 } = {
       inaccuracies_per_100: per100(counted.inaccuracy),
     };
   });
+}
+
+/* ------------------------------------------------------------------ *
+ * Smoothed daily trend                                                *
+ * ------------------------------------------------------------------ */
+
+const DAY_MS = 86_400_000;
+
+/**
+ * Triangular weights over a window of +-`radius` days, centred on the day.
+ *
+ * Triangular rather than flat so a day is described mostly by itself and its
+ * neighbours, and only faintly by the edge of the window. `radius = 3` is a
+ * week centred on the day, which is the span that turns a month of play into a
+ * line you can read.
+ */
+export function smoothingWeights(radius) {
+  const weights = [];
+  for (let offset = -radius; offset <= radius; offset += 1) {
+    weights.push({ offset, weight: radius + 1 - Math.abs(offset) });
+  }
+  return weights;
+}
+
+/** Every calendar day from the first game to the last, gaps included. */
+function dayAxis(games) {
+  let first = Infinity;
+  let last = -Infinity;
+  for (const game of games) {
+    const time = Date.parse(game.played_at);
+    if (!Number.isFinite(time)) continue;
+    const day = Math.floor(time / DAY_MS);
+    if (day < first) first = day;
+    if (day > last) last = day;
+  }
+  if (!Number.isFinite(first)) return [];
+
+  const days = [];
+  for (let day = first; day <= last; day += 1) {
+    days.push(new Date(day * DAY_MS).toISOString().slice(0, 10));
+  }
+  return days;
+}
+
+/** The raw ingredients of one day, kept unaveraged so they can be summed. */
+function blankDay(key) {
+  return {
+    period: key,
+    games: 0,
+    wins: 0,
+    draws: 0,
+    analysed: 0,
+    accuracy_sum: 0,
+    accuracy_n: 0,
+    acpl_sum: 0,
+    acpl_n: 0,
+    moves: 0,
+    blunders: 0,
+    mistakes: 0,
+    inaccuracies: 0,
+    counted_blunders: 0,
+    counted_mistakes: 0,
+    counted_inaccuracies: 0,
+  };
+}
+
+const PLURAL = { blunder: "blunders", mistake: "mistakes", inaccuracy: "inaccuracies" };
+
+/**
+ * A daily series smoothed against the days around it.
+ *
+ * By week there are not enough weeks to see anything; by day a single
+ * afternoon swings the line from 0 to 100. This is the middle: a point per
+ * day, each one describing itself and the week around it.
+ *
+ * Two things it deliberately does not do. It does not average the daily
+ * averages - a day with one game would then weigh as much as a day with ten -
+ * but sums the numerators and the denominators separately across the window,
+ * so every game counts once wherever it was played. And it walks the calendar
+ * rather than the list of days that have games, so a neighbour is a day away
+ * and not three weeks away across a gap where nothing was played.
+ *
+ * Every value comes back twice: `raw_*` is that day alone, and the plain name
+ * is the smoothed one, so a chart can draw the trend without hiding the data
+ * underneath it.
+ */
+export function computeSmoothedTrends(games, { radius = 3, limit = 60 } = {}) {
+  const days = dayAxis(games);
+  if (!days.length) return [];
+
+  const byDay = new Map(days.map((key) => [key, blankDay(key)]));
+  for (const game of games) {
+    const bucket = byDay.get(bucketOf(game, "day"));
+    if (!bucket) continue;
+
+    bucket.games += 1;
+    if (game.result === "win") bucket.wins += 1;
+    if (game.result === "draw") bucket.draws += 1;
+
+    const m = mine(game);
+    if (!m) continue;
+    bucket.analysed += 1;
+    if (m.accuracy !== null && m.accuracy !== undefined) {
+      bucket.accuracy_sum += m.accuracy;
+      bucket.accuracy_n += 1;
+    }
+    if (m.acpl !== null && m.acpl !== undefined) {
+      bucket.acpl_sum += m.acpl;
+      bucket.acpl_n += 1;
+    }
+
+    const played = myMoveCount(game);
+    if (played) bucket.moves += played;
+    for (const judgment of JUDGMENTS) {
+      const n = m.counts[judgment] ?? 0;
+      bucket[PLURAL[judgment]] += n;
+      // Same rule as `computeJudgmentTrends`: a game whose moves could not be
+      // counted stays out of the per-hundred rate on both sides of the ratio.
+      if (played) bucket[`counted_${PLURAL[judgment]}`] += n;
+    }
+  }
+
+  const ordered = days.map((key) => byDay.get(key));
+  const weights = smoothingWeights(radius);
+
+  const series = ordered.map((day, index) => {
+    const totals = blankDay(day.period);
+    for (const { offset, weight } of weights) {
+      const neighbour = ordered[index + offset];
+      if (!neighbour) continue;
+      for (const field of Object.keys(totals)) {
+        if (field === "period") continue;
+        totals[field] += neighbour[field] * weight;
+      }
+    }
+
+    const ratio = (numerator, denominator, digits) =>
+      denominator ? roundTo(numerator / denominator, digits) : null;
+
+    return {
+      period: day.period,
+      games: day.games,
+      analysed: day.analysed,
+      window_games: totals.games,
+
+      // That day's own totals, under the names `computeJudgmentTrends` uses,
+      // so a caller can sum a window the same way whichever series it holds.
+      blunders: day.blunders,
+      mistakes: day.mistakes,
+      inaccuracies: day.inaccuracies,
+
+      raw_win_rate: day.games ? rate(day.wins, day.draws, day.games) : null,
+      raw_avg_accuracy: ratio(day.accuracy_sum, day.accuracy_n, 1),
+      raw_blunders_per_game: ratio(day.blunders, day.analysed, 2),
+
+      win_rate: ratio(100 * (totals.wins + 0.5 * totals.draws), totals.games, 1),
+      avg_accuracy: ratio(totals.accuracy_sum, totals.accuracy_n, 1),
+      avg_acpl: ratio(totals.acpl_sum, totals.acpl_n, 1),
+
+      blunders_per_game: ratio(totals.blunders, totals.analysed, 2),
+      mistakes_per_game: ratio(totals.mistakes, totals.analysed, 2),
+      inaccuracies_per_game: ratio(totals.inaccuracies, totals.analysed, 2),
+
+      blunders_per_100: ratio(100 * totals.counted_blunders, totals.moves, 2),
+      mistakes_per_100: ratio(100 * totals.counted_mistakes, totals.moves, 2),
+      inaccuracies_per_100: ratio(100 * totals.counted_inaccuracies, totals.moves, 2),
+    };
+  });
+
+  return series.slice(-limit);
 }
 
 /** Where the damage happens: worst moves and the move numbers they cluster on. */

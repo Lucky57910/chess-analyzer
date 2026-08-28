@@ -184,6 +184,18 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
       return computeInsights(await loadAllGames(), options);
     },
 
+    /**
+     * The daily series, smoothed against the days around each point.
+     *
+     * One method rather than two: the smoothed score and the smoothed judgment
+     * counts share a calendar axis and a single pass builds both, where
+     * `trends` and `judgmentTrends` are two passes over the archive.
+     */
+    smoothedTrends: async (radius = 3, limit = 60) => {
+      const { computeSmoothedTrends } = await import("../data/stats.js");
+      return computeSmoothedTrends(await loadAllGames(), { radius, limit });
+    },
+
     mistakes: async () => {
       const { computeMistakes } = await import("../data/stats.js");
       return computeMistakes(await loadAllGames());

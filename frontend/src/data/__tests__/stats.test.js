@@ -13,12 +13,14 @@ import golden from "../__fixtures__/golden-data.json";
 import {
   computeJudgmentTrends,
   computeMistakes,
+  computeSmoothedTrends,
   computeStats,
   computeTrends,
   formatBucket,
   isoWeek,
   myMoveCount,
   rate,
+  smoothingWeights,
 } from "../stats.js";
 
 describe("stats against the Python", () => {
@@ -225,5 +227,106 @@ describe("computeJudgmentTrends", () => {
     const many = [1, 2, 3, 4, 5].map((d) => game(d, d + 9, "white", { blunder: d }, 20));
     const points = computeJudgmentTrends(many, { period: "day", limit: 2 });
     expect(points.map((p) => p.period)).toEqual(["2026-08-13", "2026-08-14"]);
+  });
+});
+
+describe("smoothingWeights", () => {
+  it("peaks on the day itself and falls off symmetrically", () => {
+    expect(smoothingWeights(3).map((w) => w.weight)).toEqual([1, 2, 3, 4, 3, 2, 1]);
+    expect(smoothingWeights(3).map((w) => w.offset)).toEqual([-3, -2, -1, 0, 1, 2, 3]);
+    expect(smoothingWeights(0).map((w) => w.weight)).toEqual([1]);
+  });
+});
+
+describe("computeSmoothedTrends", () => {
+  const on = (day, over = {}) => {
+    const { accuracy = 80, acpl = 40, counts = {}, plies = 40, result = "win" } = over;
+    return {
+      id: `${day}-${Math.random()}`,
+      user_color: "white",
+      result,
+      played_at: `2026-08-${String(day).padStart(2, "0")}T12:00:00.000Z`,
+      analysis: {
+        moves_evaluated: plies,
+        accuracy_white: accuracy,
+        accuracy_black: accuracy,
+        acpl_white: acpl,
+        acpl_black: acpl,
+        judgment_counts: { white: counts, black: counts },
+      },
+    };
+  };
+
+  // Without this the series is drawn against the days that happen to have
+  // games, so a "neighbour" can be three weeks away across a gap and the
+  // smoothing quietly averages across it.
+  it("walks the calendar, including days with no games", () => {
+    const series = computeSmoothedTrends([on(10), on(14)], { radius: 1 });
+    expect(series.map((p) => p.period)).toEqual([
+      "2026-08-10",
+      "2026-08-11",
+      "2026-08-12",
+      "2026-08-13",
+      "2026-08-14",
+    ]);
+    // The 12th sits two days from either game, outside a radius of 1.
+    expect(series[2].win_rate).toBe(null);
+    expect(series[2].games).toBe(0);
+  });
+
+  // The whole reason the raw components are carried around rather than the
+  // daily averages: otherwise a day with one game weighs as much as a day
+  // with ten, and one bad afternoon owns the line.
+  it("weighs by games played, not by days", () => {
+    const games = [
+      on(10, { result: "loss" }),
+      ...Array.from({ length: 9 }, () => on(11, { result: "win" })),
+    ];
+    const series = computeSmoothedTrends(games, { radius: 1 });
+    const eleventh = series.find((p) => p.period === "2026-08-11");
+
+    // Ten games in the window, nine of them wins - not the midpoint of a 0 %
+    // day and a 100 % day, which would be 50.
+    expect(eleventh.window_games).toBe(10 + 9); // weight 2 on the day itself
+    expect(eleventh.win_rate).toBeGreaterThan(90);
+  });
+
+  it("keeps each day's own value beside the smoothed one", () => {
+    const series = computeSmoothedTrends([on(10, { accuracy: 100 }), on(11, { accuracy: 0 })], {
+      radius: 1,
+    });
+    const tenth = series[0];
+    expect(tenth.raw_avg_accuracy).toBe(100);
+    // Its own day carries weight 2, the neighbour weight 1: (2*100 + 0) / 3.
+    expect(tenth.avg_accuracy).toBe(66.7);
+  });
+
+  it("smooths the judgment counts the same way", () => {
+    const series = computeSmoothedTrends(
+      [on(10, { counts: { blunder: 4 }, plies: 40 }), on(11, { counts: { blunder: 0 }, plies: 40 })],
+      { radius: 1 },
+    );
+    // The raw totals keep the field names computeJudgmentTrends uses, so a
+    // caller can sum a window without knowing which series it is holding.
+    expect(series[0].blunders).toBe(4);
+    expect(series[1].blunders).toBe(0);
+    expect(series[0].raw_blunders_per_game).toBe(4);
+    expect(series[0].blunders_per_game).toBe(2.67); // (2*4 + 0) / 3
+    // 20 of the user's own moves per game, weighted 2 and 1: 60 moves, 8 blunders.
+    expect(series[0].blunders_per_100).toBe(13.33);
+  });
+
+  it("smooths across the edge of the window rather than at it", () => {
+    // 40 days of play, asked for the last 5: those five must still be smoothed
+    // against the days before them, not against an empty left edge.
+    const games = Array.from({ length: 28 }, (_, i) => on(i + 1, { accuracy: 50 }));
+    const series = computeSmoothedTrends(games, { radius: 3, limit: 5 });
+    expect(series.length).toBe(5);
+    expect(series[0].avg_accuracy).toBe(50);
+  });
+
+  it("has nothing to say about an empty archive", () => {
+    expect(computeSmoothedTrends([])).toEqual([]);
+    expect(computeSmoothedTrends([{ played_at: "nonsense", user_color: "white" }])).toEqual([]);
   });
 });

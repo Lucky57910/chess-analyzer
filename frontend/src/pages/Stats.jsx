@@ -28,20 +28,29 @@ import { api } from '../utils/api'
 const PHASE_LABEL = { opening: 'Ouverture', middlegame: 'Milieu', endgame: 'Finale' }
 const axis = { fill: 'var(--color-ink-500)', fontSize: 11 }
 
-const PERIOD_LABEL = { day: 'Jour', week: 'Semaine', month: 'Mois' }
+const PERIODS = ['smooth', 'day', 'week', 'month']
+const PERIOD_LABEL = {
+  smooth: 'Jour lissé',
+  day: 'Jour',
+  week: 'Semaine',
+  month: 'Mois',
+}
 
 /**
  * How many buckets to ask for, per granularity.
  *
- * A single number cannot serve all three: 16 buckets is four months by week and
+ * A single number cannot serve all four: 16 buckets is four months by week and
  * barely two weeks by day, which is exactly the window a daily view exists to
  * widen. These are chosen so each period covers a comparable stretch of time.
  */
-const TREND_BUCKETS = { day: 60, week: 26, month: 24 }
+const TREND_BUCKETS = { smooth: 60, day: 60, week: 26, month: 24 }
+
+/** Days either side of each point in the smoothed view: a centred week. */
+const SMOOTH_RADIUS = 3
 
 /** "3 semaines", "1 jour", "8 mois" - `mois` does not take the plural. */
 function bucketCount(n, period) {
-  const noun = { day: 'jour', week: 'semaine', month: 'mois' }[period]
+  const noun = { smooth: 'jour', day: 'jour', week: 'semaine', month: 'mois' }[period]
   return `${n} ${noun}${n > 1 && period !== 'month' ? 's' : ''}`
 }
 
@@ -161,7 +170,9 @@ export default function Stats() {
   const [judgments, setJudgments] = useState([])
   const [mistakes, setMistakes] = useState(null)
   const [insights, setInsights] = useState(null)
-  const [period, setPeriod] = useState('week')
+  // The smoothed daily view is the default: by week there are not enough weeks
+  // to see anything yet, and by day one afternoon swings the line end to end.
+  const [period, setPeriod] = useState('smooth')
   const [normalise, setNormalise] = useState('game')
   const [error, setError] = useState(null)
 
@@ -180,7 +191,14 @@ export default function Stats() {
 
   useEffect(() => {
     const buckets = TREND_BUCKETS[period]
-    Promise.all([api.trends(period, buckets), api.judgmentTrends(period, buckets)])
+    // The smoothed series carries both halves under the same field names, and
+    // one pass over the archive builds them together.
+    const load =
+      period === 'smooth'
+        ? api.smoothedTrends(SMOOTH_RADIUS, buckets).then((series) => [series, series])
+        : Promise.all([api.trends(period, buckets), api.judgmentTrends(period, buckets)])
+
+    load
       .then(([t, j]) => {
         setTrends(t)
         setJudgments(j)
@@ -255,7 +273,7 @@ export default function Stats() {
           coincidence rather than a setting. */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm text-ink-300">Granularité</span>
-        {['day', 'week', 'month'].map((p) => (
+        {PERIODS.map((p) => (
           <button
             key={p}
             type="button"
@@ -272,7 +290,11 @@ export default function Stats() {
 
       <Panel
         title="Précision et score dans le temps"
-        hint="Deux mesures indépendantes, toutes deux sur 100 : la qualité de vos coups, et vos résultats."
+        hint={
+          period === 'smooth'
+            ? `Un point par jour, chacun décrivant sa propre journée et la semaine autour d’elle. Les points pâles sont les journées brutes.`
+            : 'Deux mesures indépendantes, toutes deux sur 100 : la qualité de vos coups, et vos résultats.'
+        }
       >
         <div className="h-64 p-3">
           <ResponsiveContainer width="100%" height="100%">
@@ -327,6 +349,27 @@ export default function Stats() {
                 strokeWidth={2}
                 dot={false}
               />
+              {/* The days themselves, under the trend. Kept out of the legend
+                  so it stays two entries, and drawn without a stroke so they
+                  read as the data the line was drawn through rather than as
+                  two more series. */}
+              {period === 'smooth' &&
+                [
+                  { key: 'raw_avg_accuracy', color: 'var(--color-accent)' },
+                  { key: 'raw_win_rate', color: 'var(--color-good)' },
+                ].map(({ key, color }) => (
+                  <Line
+                    key={key}
+                    dataKey={key}
+                    name="Journée brute"
+                    legendType="none"
+                    stroke="none"
+                    strokeWidth={0}
+                    dot={{ r: 1.8, fill: color, fillOpacity: 0.45, stroke: 'none' }}
+                    activeDot={false}
+                    isAnimationActive={false}
+                  />
+                ))}
             </LineChart>
           </ResponsiveContainer>
         </div>
@@ -334,7 +377,11 @@ export default function Stats() {
 
       <Panel
         title="Gaffes, erreurs et imprécisions dans le temps"
-        hint="La surface à faire baisser. Les gaffes sont en bas : c’est celle-là qui coûte des parties."
+        hint={
+          period === 'smooth'
+            ? 'La surface à faire baisser, lissée sur la semaine autour de chaque jour. Les gaffes sont en bas.'
+            : 'La surface à faire baisser. Les gaffes sont en bas : c’est celle-là qui coûte des parties.'
+        }
       >
         <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
           {Object.entries(NORMALISE).map(([key, { label }]) => (

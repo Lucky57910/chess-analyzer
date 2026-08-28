@@ -136,6 +136,31 @@ vi.mock("../utils/api", () => {
         inaccuracies_per_100: 5.5,
       },
     ]),
+    // The smoothed series carries both halves of the two time charts under the
+    // same field names as `trends` and `judgmentTrends`, plus the raw dailies.
+    smoothedTrends: vi.fn(async () =>
+      ["2026-08-20", "2026-08-21", "2026-08-22"].map((period, i) => ({
+        period,
+        games: i + 1,
+        analysed: i + 1,
+        window_games: 6,
+        blunders: 4 - i,
+        mistakes: 3,
+        inaccuracies: 5,
+        raw_win_rate: i === 1 ? 0 : 100,
+        raw_avg_accuracy: i === 1 ? 55 : 90,
+        raw_blunders_per_game: 4 - i,
+        win_rate: 60 + i,
+        avg_accuracy: 80 + i,
+        avg_acpl: 40 - i,
+        blunders_per_game: 1.2 - i * 0.1,
+        mistakes_per_game: 1.5,
+        inaccuracies_per_game: 2,
+        blunders_per_100: 4 - i * 0.5,
+        mistakes_per_100: 5,
+        inaccuracies_per_100: 7,
+      })),
+    ),
     mistakes: vi.fn(async () => ({
       worst_moves: [],
       by_move_number: [
@@ -463,8 +488,19 @@ describe("the stats page", () => {
   // 16 buckets was one number for three granularities: four months by week,
   // barely two weeks by day - which is the window the daily view exists to
   // widen. The count has to follow the granularity.
+  // By week there are not enough weeks to read anything, and by day a single
+  // afternoon swings the line end to end, so the smoothed daily view opens.
+  it("opens on the smoothed daily view", async () => {
+    renderApp("/stats");
+    await waitFor(() => expect(api.smoothedTrends).toHaveBeenCalledWith(3, 60));
+    expect(api.trends).not.toHaveBeenCalled();
+    expect(api.judgmentTrends).not.toHaveBeenCalled();
+    expect(await screen.findByText(/la semaine autour d’elle/)).toBeDefined();
+  });
+
   it("asks for a window that matches the granularity", async () => {
     renderApp("/stats");
+    fireEvent.click(await screen.findByRole("button", { name: "Semaine" }));
     await waitFor(() => expect(api.trends).toHaveBeenCalledWith("week", 26));
 
     fireEvent.click(await screen.findByRole("button", { name: "Jour" }));
@@ -477,10 +513,24 @@ describe("the stats page", () => {
   // Both time series read the same granularity, so the selector drives both.
   it("moves the judgment series with the granularity too", async () => {
     renderApp("/stats");
+    fireEvent.click(await screen.findByRole("button", { name: "Semaine" }));
     await waitFor(() => expect(api.judgmentTrends).toHaveBeenCalledWith("week", 26));
 
     fireEvent.click(await screen.findByRole("button", { name: "Jour" }));
     await waitFor(() => expect(api.judgmentTrends).toHaveBeenCalledWith("day", 60));
+  });
+
+  // One pass over the archive builds both halves, so the smoothed view must
+  // not also go through the two unsmoothed series.
+  it("builds the smoothed view from a single pass", async () => {
+    renderApp("/stats");
+    fireEvent.click(await screen.findByRole("button", { name: "Semaine" }));
+    await waitFor(() => expect(api.trends).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Jour lissé" }));
+    await waitFor(() => expect(api.smoothedTrends).toHaveBeenCalledTimes(2));
+    expect(api.trends).toHaveBeenCalledTimes(1);
+    expect(api.judgmentTrends).toHaveBeenCalledTimes(1);
   });
 
   // Neither of these depends on the granularity. Re-deriving them on every
@@ -541,6 +591,7 @@ describe("the stats page", () => {
 
   it("counts blunders per game or per hundred moves, on demand", async () => {
     renderApp("/stats");
+    fireEvent.click(await screen.findByRole("button", { name: "Semaine" }));
     // 5 + 3 blunders over 4 + 6 analysed games in the mocked window.
     expect(await screen.findByText(/8 gaffes sur 10 parties analysées/)).toBeDefined();
     expect(await screen.findByRole("button", { name: "Par partie" })).toBeDefined();
