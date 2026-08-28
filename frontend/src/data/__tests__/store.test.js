@@ -319,3 +319,123 @@ describe("sync", () => {
     });
   });
 });
+
+describe("loading the whole archive", () => {
+  let ctx;
+  beforeEach(async () => {
+    ctx = await freshStore();
+    await ctx.store.upsertMany(ROWS);
+  });
+
+  /** What the statistics layer used to do: list, then one query per game. */
+  async function oneQueryPerGame(store) {
+    const { games } = await store.list({ limit: Number.MAX_SAFE_INTEGER });
+    const out = [];
+    for (const game of games) {
+      out.push({ ...game, analysis: await store.getAnalysis(game.id) });
+    }
+    return out;
+  }
+
+  // The join has to produce exactly what the loop produced, field for field,
+  // or every number on the statistics screen shifts without anything throwing.
+  it("matches the query-per-game loop it replaces", async () => {
+    const { games } = await ctx.store.list({ limit: 100 });
+    for (const game of games.slice(0, 4)) {
+      await ctx.store.saveAnalysis(game.id, analysisResult());
+    }
+
+    const joined = await ctx.store.listWithAnalyses();
+    const looped = await oneQueryPerGame(ctx.store);
+
+    expect(joined.length).toBe(looped.length);
+    // `list` carries a few analysis columns flattened onto the row for the
+    // games list; those are not part of what the archive loader returns.
+    const shared = (row) => {
+      const { accuracy_white, accuracy_black, acpl_white, acpl_black, judgment_counts,
+        engine_depth, ...rest } = row;
+      return rest;
+    };
+    expect(joined.map(shared)).toEqual(looped.map(shared));
+  });
+
+  it("nests the analysis rather than flattening it onto the game", async () => {
+    const [game] = (await ctx.store.list({ limit: 1 })).games;
+    await ctx.store.saveAnalysis(game.id, analysisResult());
+
+    const found = (await ctx.store.listWithAnalyses()).find((g) => g.id === game.id);
+    expect(found.analysis.game_id).toBe(game.id);
+    // The game keeps its own id and creation date, not the analysis row's.
+    expect(found.id).toBe(game.id);
+    expect(found.analysis.id).not.toBe(undefined);
+    // JSON columns are parsed even though the join renamed them.
+    expect(Array.isArray(found.analysis.moves)).toBe(true);
+    expect(found.analysis.moves).toEqual(analysisResult().moves);
+    expect(found.analysis.judgment_counts).toEqual(analysisResult().judgment_counts);
+  });
+
+  // A LEFT JOIN with no match fills every analysis column with null. Reading
+  // that as an analysis whose fields are empty would report a full archive of
+  // perfectly played games.
+  it("gives an unanalysed game no analysis at all", async () => {
+    const rows = await ctx.store.listWithAnalyses();
+    expect(rows.length).toBe(ROWS.length);
+    expect(rows.every((row) => row.analysis === null)).toBe(true);
+  });
+
+  it("orders newest first, like every other listing", async () => {
+    const rows = await ctx.store.listWithAnalyses();
+    const times = rows.map((row) => row.end_time);
+    expect(times).toEqual([...times].sort((a, b) => b - a));
+  });
+});
+
+describe("the archive fingerprint", () => {
+  let ctx;
+  beforeEach(async () => {
+    ctx = await freshStore();
+    await ctx.store.upsertMany(ROWS);
+  });
+
+  it("is stable while nothing changes", async () => {
+    expect(await ctx.store.fingerprint()).toBe(await ctx.store.fingerprint());
+  });
+
+  it("moves when a game arrives", async () => {
+    const before = await ctx.store.fingerprint();
+    await ctx.store.upsertMany([{ ...ROWS[0], chess_com_game_id: "brand-new" }]);
+    expect(await ctx.store.fingerprint()).not.toBe(before);
+  });
+
+  it("moves when an analysis lands", async () => {
+    const [game] = (await ctx.store.list({ limit: 1 })).games;
+    const before = await ctx.store.fingerprint();
+    await ctx.store.saveAnalysis(game.id, analysisResult());
+    expect(await ctx.store.fingerprint()).not.toBe(before);
+  });
+
+  // A re-analysis at a deeper setting replaces the row without adding one, so
+  // counting rows alone would hold a stale archive in front of the user.
+  it("moves when an existing analysis is replaced", async () => {
+    const [game] = (await ctx.store.list({ limit: 1 })).games;
+    await ctx.store.saveAnalysis(game.id, analysisResult({ engine_depth: 14 }));
+    const before = await ctx.store.fingerprint();
+
+    await new Promise((resolve) => setTimeout(resolve, 2));
+    await ctx.store.saveAnalysis(game.id, analysisResult({ engine_depth: 20 }));
+    expect(await ctx.store.fingerprint()).not.toBe(before);
+  });
+
+  it("moves when a game fails and leaves the analysed set", async () => {
+    const [game] = (await ctx.store.list({ limit: 1 })).games;
+    await ctx.store.saveAnalysis(game.id, analysisResult());
+    const before = await ctx.store.fingerprint();
+    await ctx.store.markFailed(game.id, "engine gone");
+    expect(await ctx.store.fingerprint()).not.toBe(before);
+  });
+
+  it("works on an empty database", async () => {
+    const empty = await freshStore();
+    expect(typeof (await empty.store.fingerprint())).toBe("string");
+  });
+});

@@ -6,9 +6,53 @@
  * the user's, so scoping it to them again would be theatre.
  */
 
+import { hydrate } from "./db.js";
 import { JSON_COLUMNS } from "./schema.js";
 
 export const MAX_ANALYSIS_ATTEMPTS = 3;
+
+/**
+ * Analysis columns, aliased when joined onto a game.
+ *
+ * `id` and `created_at` exist on both tables, so the join cannot be selected
+ * flat. The prefix keeps them apart and is stripped straight back off; it also
+ * hides the JSON columns from the repository's own parser, which matches on
+ * bare column names, so they are parsed here instead.
+ */
+const ANALYSIS_COLUMNS = [
+  "id",
+  "game_id",
+  "engine_depth",
+  "engine_name",
+  "moves_evaluated",
+  "moves",
+  "errors",
+  "blunders",
+  "accuracy_white",
+  "accuracy_black",
+  "acpl_white",
+  "acpl_black",
+  "judgment_counts",
+  "phase_stats",
+  "created_at",
+  "updated_at",
+];
+
+const ANALYSIS_PREFIX = "analysis__";
+
+/** Split one joined row back into a game with its analysis nested. */
+function splitAnalysis(row) {
+  const game = {};
+  const analysis = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (key.startsWith(ANALYSIS_PREFIX)) analysis[key.slice(ANALYSIS_PREFIX.length)] = value;
+    else game[key] = value;
+  }
+  // A LEFT JOIN with no match fills every analysis column with null, which is
+  // not the same as an analysis whose fields happen to be empty.
+  game.analysis = analysis.id === null || analysis.id === undefined ? null : hydrate(analysis);
+  return game;
+}
 
 const GAME_COLUMNS = [
   "chess_com_game_id",
@@ -127,6 +171,47 @@ export function createGameStore(repo) {
         [...values, limit, offset],
       );
       return { games: rows, total: await this.count(where, values) };
+    },
+
+    /**
+     * Every game with its analysis attached, newest first, in one query.
+     *
+     * The statistics layer needs the whole archive, and used to get it by
+     * listing the games and then asking for each analysis in turn. On a phone
+     * that is one round trip across the Capacitor bridge per game - three
+     * hundred games, three hundred crossings, each with its own serialisation -
+     * to answer a question that is one join.
+     */
+    async listWithAnalyses() {
+      const selected = ANALYSIS_COLUMNS.map(
+        (column) => `a.${column} AS ${ANALYSIS_PREFIX}${column}`,
+      ).join(", ");
+      const rows = await repo.all(
+        `SELECT g.*, ${selected}
+           FROM games g LEFT JOIN analyses a ON a.game_id = g.id
+          ORDER BY g.end_time DESC`,
+      );
+      return rows.map(splitAnalysis);
+    },
+
+    /**
+     * A short string that changes whenever the archive does.
+     *
+     * Four aggregates over indexed columns, so it costs one small query and
+     * lets a caller skip reloading megabytes it already holds. It is derived
+     * from the database rather than from a counter the writers bump, because
+     * not every writer goes through this store: restoring a backup writes rows
+     * straight through the repository, and a counter would not see it.
+     */
+    async fingerprint() {
+      const row = await repo.one(
+        `SELECT (SELECT COUNT(*) FROM games) AS games,
+                (SELECT IFNULL(MAX(end_time), 0) FROM games) AS newest,
+                (SELECT COUNT(*) FROM games WHERE analysis_status = 'done') AS done,
+                (SELECT COUNT(*) FROM analyses) AS analyses,
+                (SELECT IFNULL(MAX(updated_at), '') FROM analyses) AS updated`,
+      );
+      return `${row.games}:${row.newest}:${row.done}:${row.analyses}:${row.updated}`;
     },
 
     async get(id) {

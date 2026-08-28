@@ -45,13 +45,32 @@ function flatten(row) {
 }
 
 export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTINGS }) {
+  /**
+   * The whole archive, loaded once and kept until the database moves.
+   *
+   * Every statistic here is a pass over every game, and the statistics screen
+   * asks for four of them in a row. It used to mean four full loads, each one
+   * a listing plus a query per game. It is now one join, and the three that
+   * follow it reuse the result.
+   *
+   * The cache is validated against the database rather than trusted: one small
+   * aggregate query per call, compared with the one the held copy was built
+   * from. That costs a round trip where a plain memo would cost none, and it
+   * buys the thing a memo cannot give - correctness when something else wrote.
+   * The analysis queue, a sync and a restored backup all change the archive
+   * from outside this object.
+   *
+   * One slot, holding the newest load: the archive carries every PGN and every
+   * move list, so keeping older copies around would be the expensive mistake.
+   */
+  let archive = null;
+
   const loadAllGames = async () => {
-    const { games } = await store.list({ limit: Number.MAX_SAFE_INTEGER });
-    const withAnalysis = [];
-    for (const game of games) {
-      withAnalysis.push({ ...game, analysis: await store.getAnalysis(game.id) });
-    }
-    return withAnalysis;
+    const key = await store.fingerprint();
+    if (archive?.key === key) return archive.games;
+    const games = await store.listWithAnalyses();
+    archive = { key, games };
+    return games;
   };
 
   return {

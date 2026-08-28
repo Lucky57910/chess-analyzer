@@ -78,10 +78,35 @@ function analysisResult(overrides = {}) {
   };
 }
 
+/** Counts the SQL that actually reaches the database. */
+function counting(driver) {
+  const queries = [];
+  return {
+    driver: {
+      ...driver,
+      query: (sql, values) => {
+        queries.push(sql);
+        return driver.query(sql, values);
+      },
+    },
+    queries,
+    /**
+     * How many of them were the full archive load.
+     *
+     * Matched on the alias the join gives the analysis columns, not on the
+     * join itself: the games listing joins the analyses too, and counting that
+     * as an archive load would make this pass whatever the cache did.
+     */
+    archiveLoads: () => queries.filter((sql) => sql.includes("analysis__")).length,
+    reset: () => queries.splice(0, queries.length),
+  };
+}
+
 async function fixture() {
   const database = new DatabaseSync(":memory:");
   database.exec("PRAGMA foreign_keys = ON");
-  const driver = nodeDriver(database);
+  const spy = counting(nodeDriver(database));
+  const driver = spy.driver;
   await migrate(driver);
   const repo = createRepository(driver);
   const store = createGameStore(repo);
@@ -95,7 +120,7 @@ async function fixture() {
   const sync = createSync({ repo, store, client, evaluate: async () => ({}) });
   const engine = { info: async () => ({ available: true, name: "Stockfish 17.1", path: "/x" }) };
   const api = createApi({ repo, store, sync, engine });
-  return { repo, store, sync, api, engine };
+  return { repo, store, sync, api, engine, spy, database };
 }
 
 describe("games", () => {
@@ -303,6 +328,76 @@ describe("stats", () => {
       expect(point.blunders_per_100).not.toBe(null);
       expect(point.blunders_per_game).not.toBe(null);
     }
+  });
+});
+
+describe("loading the archive", () => {
+  let ctx;
+  beforeEach(async () => {
+    ctx = await fixture();
+    const games = await ctx.api.games({ limit: 100 });
+    for (const game of games.slice(0, 5)) {
+      await ctx.store.saveAnalysis(game.id, analysisResult());
+    }
+    ctx.spy.reset();
+  });
+
+  // The statistics screen asks for four of these in a row. Each one used to be
+  // a full listing plus a query per game.
+  it("reads the archive once for a screenful of statistics", async () => {
+    await ctx.api.stats();
+    await ctx.api.mistakes();
+    await ctx.api.insights();
+    await ctx.api.trends("week", 12);
+
+    expect(ctx.spy.archiveLoads()).toBe(1);
+  });
+
+  it("still returns the same numbers from the cached copy", async () => {
+    const first = await ctx.api.stats();
+    const second = await ctx.api.stats();
+    expect(second).toEqual(first);
+    expect(ctx.spy.archiveLoads()).toBe(1);
+  });
+
+  // The cache is checked against the database rather than trusted, because the
+  // analysis queue writes from outside this object. A held copy that survived
+  // an analysis would show the user a screen that never updates.
+  it("reloads once an analysis lands", async () => {
+    const before = await ctx.api.stats();
+    expect(ctx.spy.archiveLoads()).toBe(1);
+
+    const pending = (await ctx.api.games({ limit: 100 })).find(
+      (game) => game.analysis_status !== "done",
+    );
+    await ctx.store.saveAnalysis(pending.id, analysisResult());
+
+    const after = await ctx.api.stats();
+    expect(ctx.spy.archiveLoads()).toBe(2);
+    expect(after.analysed).toBe(before.analysed + 1);
+  });
+
+  it("reloads once a sync brings a game in", async () => {
+    await ctx.api.stats();
+    await ctx.store.upsertMany([
+      { ...ROWS[0], chess_com_game_id: "arrived-later", end_time: ROWS[0].end_time + 1 },
+    ]);
+
+    const after = await ctx.api.stats();
+    expect(ctx.spy.archiveLoads()).toBe(2);
+    expect(after.games).toBe(ROWS.length + 1);
+  });
+
+  // Restoring a backup writes rows straight through the repository without
+  // going through the store at all, which is why the cache is validated
+  // against the database and not against a counter the store keeps.
+  it("reloads after a restore that never touched the store", async () => {
+    const before = await ctx.api.stats();
+    await ctx.repo.run("DELETE FROM games WHERE id IN (SELECT id FROM games LIMIT 3)");
+
+    const after = await ctx.api.stats();
+    expect(ctx.spy.archiveLoads()).toBe(2);
+    expect(after.games).toBe(before.games - 3);
   });
 });
 
