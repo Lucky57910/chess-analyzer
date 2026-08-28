@@ -254,7 +254,7 @@ export default function GameAnalysis() {
             Ré-analyser
           </button>
           <Link
-            to="/"
+            to="/games"
             className="rounded-md border border-ink-700 px-3 py-1.5 text-sm text-ink-300 hover:bg-ink-800"
           >
             Retour

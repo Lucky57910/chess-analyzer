@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom'
+import { Link, NavLink } from 'react-router-dom'
 import { useQueue } from '../hooks/useQueue'
 import { useSettings } from '../hooks/useSettings'
 
@@ -16,10 +16,15 @@ export default function Navigation() {
   return (
     <header className="border-b border-ink-800 bg-ink-900">
       <nav className="mx-auto flex max-w-7xl items-center gap-2 px-4 py-3">
-        <span className="mr-4 text-lg font-semibold tracking-tight">
+        {/* The title is the way back to the overview, which is what a logo in
+            this position is expected to do. */}
+        <Link
+          to="/"
+          className="mr-4 rounded text-lg font-semibold tracking-tight hover:opacity-80"
+        >
           ♞ <span className="text-ink-100">Chess Analyzer</span>
-        </span>
-        <NavLink to="/" end className={linkClass}>
+        </Link>
+        <NavLink to="/games" className={linkClass}>
           Parties
         </NavLink>
         <NavLink to="/stats" className={linkClass}>

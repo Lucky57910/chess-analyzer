@@ -6,6 +6,7 @@ import { useSettings } from './hooks/useSettings'
 // Split per route: the charting library only travels with the pages that draw
 // a chart, which matters more now that everything ships inside an APK.
 const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Home = lazy(() => import('./pages/Home'))
 const GameAnalysis = lazy(() => import('./pages/GameAnalysis'))
 const Settings = lazy(() => import('./pages/Settings'))
 const Stats = lazy(() => import('./pages/Stats'))
@@ -51,6 +52,14 @@ export default function App() {
     <Routes>
       <Route
         path="/"
+        element={
+          <Shell>
+            <Home />
+          </Shell>
+        }
+      />
+      <Route
+        path="/games"
         element={
           <Shell>
             <Dashboard />

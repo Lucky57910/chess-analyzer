@@ -172,9 +172,27 @@ vi.mock("../utils/api", () => {
       by_rating_gap: [
         { key: "even", name: "Équivalent (−50 à +50)", games: 8, win_rate: 50, avg_accuracy: 80 },
       ],
+      // Ranked worst-first, as the statistics screen wants them. The home
+      // screen wants the most recent instead, so the biggest one here is
+      // deliberately the older: taking the head of this list is wrong there
+      // and a single entry would never say so.
       costly_mistakes: [
         {
+          game_id: 4,
+          played_at: "2026-08-02T12:00:00.000Z",
+          opponent: "ancien",
+          move_number: 9,
+          ply: 17,
+          san: "Qa4",
+          best_move_san: "Nc3",
+          cp_loss: 480,
+          judgment: "blunder",
+          phase: "opening",
+          eval_cp_before: 10,
+        },
+        {
           game_id: 1,
+          played_at: "2026-08-24T02:26:40.000Z",
           opponent: "rival",
           move_number: 14,
           ply: 27,
@@ -337,19 +355,19 @@ afterEach(cleanup);
 
 describe("the dashboard", () => {
   it("shows the games it was given", async () => {
-    renderApp("/");
+    renderApp("/games");
     expect(await screen.findByText("rival")).toBeDefined();
     expect(api.gamesPage).toHaveBeenCalled();
   });
 
   // The list used to stop at 25 rows with nothing saying there were more.
   it("says how much of the archive is on screen", async () => {
-    renderApp("/");
+    renderApp("/games");
     expect(await screen.findByText("25 sur 342 parties")).toBeDefined();
   });
 
   it("widens the window instead of stitching pages together", async () => {
-    renderApp("/");
+    renderApp("/games");
     const more = await screen.findByRole("button", { name: /Charger 25 de plus/ });
     fireEvent.click(more);
 
@@ -376,13 +394,13 @@ describe("the dashboard", () => {
       ],
       total: 1,
     });
-    renderApp("/");
+    renderApp("/games");
     expect(await screen.findByText("1 sur 1 partie")).toBeDefined();
     expect(screen.queryByRole("button", { name: /Charger/ })).toBe(null);
   });
 
   it("filters the query and goes back to the first window", async () => {
-    renderApp("/");
+    renderApp("/games");
     fireEvent.click(await screen.findByRole("button", { name: /Charger 25 de plus/ }));
     expect(await screen.findByText("50 sur 342 parties")).toBeDefined();
 
@@ -399,7 +417,7 @@ describe("the dashboard", () => {
   // than nothing: typed in the same tick they would collapse on their own, and
   // the test would pass against a version that has no debounce at all.
   it("searches on the opponent once the user stops typing", async () => {
-    renderApp("/");
+    renderApp("/games");
     await screen.findByText("rival");
     const box = screen.getByPlaceholderText(/Chercher un adversaire/);
 
@@ -415,7 +433,7 @@ describe("the dashboard", () => {
   });
 
   it("shows the summary numbers", async () => {
-    renderApp("/");
+    renderApp("/games");
     await waitFor(() => expect(api.stats).toHaveBeenCalled());
     expect(await screen.findByText(/58[.,]3/)).toBeDefined();
   });
@@ -423,11 +441,74 @@ describe("the dashboard", () => {
   // The queue costs battery and only runs in the foreground, so it must not
   // start itself the moment the app opens.
   it("offers the queue rather than starting it", async () => {
-    renderApp("/");
+    renderApp("/games");
     const button = await screen.findByRole("button", { name: /Analyser/ });
     expect(button).toBeDefined();
     const { sync } = await getApi();
     expect(sync.runQueue).not.toHaveBeenCalled();
+  });
+});
+
+describe("the home screen", () => {
+  // The logo used to be a dead <span>. It is the way back to the overview now,
+  // which is the whole reason this screen exists.
+  it("is where the title in the bar leads", async () => {
+    renderApp("/games");
+    expect(await screen.findByText("25 sur 342 parties")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("link", { name: /Chess Analyzer/ }));
+    expect(await screen.findByText("Vue d’ensemble")).toBeDefined();
+  });
+
+  it("leads the headline numbers with the last thirty days", async () => {
+    renderApp("/");
+    expect(await screen.findByText(/30 derniers jours · 10 parties classées/)).toBeDefined();
+    // 60 % over 10 games, from the comparison rather than from all of history.
+    expect(await screen.findByText("60%")).toBeDefined();
+    expect(await screen.findByText(/▲ 10 pts/)).toBeDefined();
+  });
+
+  // The queue only runs in the foreground and does not start itself, so the
+  // one thing this screen exists to prompt is starting it.
+  it("offers the analysis queue rather than starting it", async () => {
+    renderApp("/");
+    const button = await screen.findByRole("button", { name: "Analyser" });
+    const { sync } = await getApi();
+    expect(sync.runQueue).not.toHaveBeenCalled();
+    expect(button).toBeDefined();
+    expect(await screen.findByText(/3 parties en attente/)).toBeDefined();
+  });
+
+  it("names the weakness in one sentence and links to the detail", async () => {
+    renderApp("/");
+    // Weakest phase from the 30-day summary, worst move number from the
+    // histogram: move 23 has 5 mistakes against move 7's 2.
+    expect(await screen.findByText(/coup 23/)).toBeDefined();
+  });
+
+  // A -480 from three weeks ago is a bigger number and a worse lesson: the
+  // habit worth catching is the one from last night.
+  it("offers the most recent mistake worth replaying, not the biggest", async () => {
+    renderApp("/");
+    expect(await screen.findByText(/il fallait jouer Bd2/)).toBeDefined();
+    expect(screen.queryByText(/il fallait jouer Nc3/)).toBe(null);
+    // And it opens the game that mistake was played in, not the other one.
+    const card = screen.getByRole("link", { name: /La dernière erreur à rejouer/ });
+    expect(card.getAttribute("href")).toBe("/games/1");
+  });
+
+  it("shows only the last few games, with a way to the rest", async () => {
+    renderApp("/");
+    await screen.findByText("Vue d’ensemble");
+    expect(api.gamesPage).toHaveBeenCalledWith({ limit: 3 });
+    expect(screen.getByRole("link", { name: "Tout l’historique" })).toBeDefined();
+  });
+
+  it("reads rated games only, like every other statistic", async () => {
+    renderApp("/");
+    await waitFor(() => expect(api.insights).toHaveBeenCalledWith({ kind: "rated" }));
+    expect(api.mistakes).toHaveBeenCalledWith("rated");
+    expect(api.smoothedTrends).toHaveBeenCalledWith(3, 30, "rated");
   });
 });
 
