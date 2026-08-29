@@ -357,8 +357,13 @@ describe("loading the whole archive", () => {
     // games list; those are not part of what the archive loader returns.
     const shared = (row) => {
       const { accuracy_white, accuracy_black, acpl_white, acpl_black, judgment_counts,
-        engine_depth, ...rest } = row;
-      return rest;
+        engine_depth, analysis, ...rest } = row;
+      // The coach's commentary is deliberately absent from the archive load:
+      // it is a paragraph per move, nothing that reads the archive uses it,
+      // and carrying it would put every game's prose in the statistics cache.
+      if (!analysis) return rest;
+      const { coach, ...sharedAnalysis } = analysis;
+      return { ...rest, analysis: sharedAnalysis };
     };
     expect(joined.map(shared)).toEqual(looped.map(shared));
   });
@@ -482,5 +487,54 @@ describe("filing a game as rated or training", () => {
     expect(training.total + rated.total).toBe(ROWS.length);
     expect(training.total).toBeGreaterThan(0);
     expect(training.games.every((g) => g.game_kind === "training")).toBe(true);
+  });
+});
+
+/**
+ * The coach's commentary, which is bought with an API quota and cannot be
+ * recomputed on the phone. Two rules matter, and neither is obvious from the
+ * SQL: a partial run adds to what is there, and re-analysing clears it.
+ */
+describe("storing the coach's commentary", () => {
+  let ctx;
+  let gameId;
+  beforeEach(async () => {
+    ctx = await freshStore();
+    await ctx.store.upsertMany(ROWS);
+    const { games } = await ctx.store.list({ limit: 1 });
+    gameId = games[0].id;
+    await ctx.store.saveAnalysis(gameId, analysisResult());
+  });
+
+  it("comes back keyed by ply, parsed", async () => {
+    await ctx.store.saveCoach(gameId, { 3: "La dame sort trop tôt." });
+    const analysis = await ctx.store.getAnalysis(gameId);
+    expect(analysis.coach).toEqual({ 3: "La dame sort trop tôt." });
+  });
+
+  it("starts empty rather than null, so a screen can index it", async () => {
+    const analysis = await ctx.store.getAnalysis(gameId);
+    expect(analysis.coach).toEqual({});
+  });
+
+  it("adds to what a previous run produced instead of replacing it", async () => {
+    await ctx.store.saveCoach(gameId, { 1: "Ouverture classique." });
+    // A second run that only covered the rest of the game - a quota that ran
+    // out halfway, a chunk the model refused - must not cost the first one.
+    const merged = await ctx.store.saveCoach(gameId, { 3: "Trop tôt." });
+    expect(merged).toEqual({ 1: "Ouverture classique.", 3: "Trop tôt." });
+    expect((await ctx.store.getAnalysis(gameId)).coach[1]).toBe("Ouverture classique.");
+  });
+
+  it("is cleared by a re-analysis, because the moves it described were re-judged", async () => {
+    await ctx.store.saveCoach(gameId, { 3: "Trop tôt." });
+    await ctx.store.saveAnalysis(gameId, analysisResult({ engine_depth: 20 }));
+    expect((await ctx.store.getAnalysis(gameId)).coach).toEqual({});
+  });
+
+  it("refuses to attach commentary to a game with no analysis", async () => {
+    const { games } = await ctx.store.list({ limit: 100 });
+    const unanalysed = games.find((g) => g.id !== gameId);
+    await expect(ctx.store.saveCoach(unanalysed.id, { 1: "x" })).rejects.toThrow(/Aucune analyse/);
   });
 });

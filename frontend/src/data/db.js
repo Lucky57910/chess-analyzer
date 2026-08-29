@@ -16,6 +16,9 @@
 
 import { JSON_COLUMNS, MIGRATIONS, SCHEMA, SCHEMA_VERSION } from "./schema.js";
 
+/** Of the JSON columns, the ones holding an object rather than a list. */
+const OBJECT_COLUMNS = new Set(["judgment_counts", "phase_stats", "coach"]);
+
 /** Parse the JSON-bearing columns of a row, leaving everything else alone. */
 export function hydrate(row) {
   if (!row) return row;
@@ -27,7 +30,7 @@ export function hydrate(row) {
       } catch {
         // A row we cannot parse is a row we cannot trust; an empty value keeps
         // the screen rendering instead of taking the whole list down.
-        out[column] = column === "judgment_counts" || column === "phase_stats" ? {} : [];
+        out[column] = OBJECT_COLUMNS.has(column) ? {} : [];
       }
     }
   }

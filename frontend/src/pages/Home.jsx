@@ -1,15 +1,22 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Area, AreaChart, ResponsiveContainer, Tooltip } from 'recharts'
+import CoachBubble from '../components/CoachBubble'
 import GameList from '../components/GameList'
 import StatsSummary from '../components/StatsSummary'
+import Button from '../components/ui/Button'
+import { Card } from '../components/ui/Card'
 import { formatBucket } from '../data/stats.js'
 import { useQueue } from '../hooks/useQueue'
 import { useSettings } from '../hooks/useSettings'
 import { JUDGMENT_CLASS, JUDGMENT_LABEL } from '../utils/chess'
 import { api } from '../utils/api'
 
-const PHASE_LABEL = { opening: 'l’ouverture', middlegame: 'le milieu de partie', endgame: 'la finale' }
+const PHASE_LABEL = {
+  opening: 'l’ouverture',
+  middlegame: 'le milieu de partie',
+  endgame: 'la finale',
+}
 
 /** Days of history behind the small curve. Enough to see a direction. */
 const CURVE_DAYS = 30
@@ -21,15 +28,15 @@ const CURVE_DAYS = 30
  * is built on: a dashboard that only restates numbers gets read once and
  * ignored afterwards. If a block has nothing to do, it does not belong here.
  */
-function Card({ to, title, children, action }) {
+function HomeCard({ to, title, children, action }) {
   const body = (
-    <div className="flex flex-col gap-1.5 rounded-lg border border-ink-800 bg-ink-900 px-4 py-3 transition-colors hover:border-ink-700">
+    <Card className="flex flex-col gap-1.5 px-4 py-3 transition-colors hover:border-line-strong">
       <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-sm font-medium text-ink-300">{title}</h2>
-        {action && <span className="shrink-0 text-xs text-accent">{action}</span>}
+        <h2 className="text-body font-medium text-muted">{title}</h2>
+        {action && <span className="shrink-0 text-label text-accent">{action}</span>}
       </div>
       {children}
-    </div>
+    </Card>
   )
   return to ? (
     <Link to={to} className="block">
@@ -70,22 +77,19 @@ export default function Home() {
 
   if (!username) {
     return (
-      <div className="rounded-lg border border-ink-800 bg-ink-900 p-6">
-        <h1 className="text-lg font-medium">Reliez votre compte Chess.com</h1>
-        <p className="mt-1 text-sm text-ink-300">
+      <Card className="p-6">
+        <h1 className="text-lead font-medium">Reliez votre compte Chess.com</h1>
+        <p className="mt-1 text-body text-muted">
           Renseignez votre pseudo Chess.com dans les réglages pour importer vos parties.
         </p>
-        <Link
-          to="/settings"
-          className="mt-4 inline-block rounded-md bg-accent px-3 py-2 text-sm font-medium text-ink-950"
-        >
+        <Button to="/settings" variant="primary" className="mt-4">
           Aller aux réglages
-        </Link>
-      </div>
+        </Button>
+      </Card>
     )
   }
 
-  if (error) return <p className="text-sm text-blunder">{error}</p>
+  if (error) return <p className="text-body text-blunder">{error}</p>
 
   const queued = (status?.pending ?? 0) + (status?.running ?? 0)
   const comparison = insights?.comparison
@@ -100,7 +104,9 @@ export default function Home() {
   )
   const weakness = [
     summary?.weakest_phase ? `vous perdez le plus dans ${PHASE_LABEL[summary.weakest_phase]}` : null,
-    worstMoveNumber ? `et vos fautes se concentrent autour du coup ${worstMoveNumber.move_number}` : null,
+    worstMoveNumber
+      ? `et vos fautes se concentrent autour du coup ${worstMoveNumber.move_number}`
+      : null,
   ]
     .filter(Boolean)
     .join(' ')
@@ -118,7 +124,7 @@ export default function Home() {
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h1 className="text-xl font-semibold">Vue d’ensemble</h1>
         {comparison && (
-          <span className="text-xs text-ink-500">
+          <span className="text-label text-faint">
             {comparison.days} derniers jours · {summary.games} partie
             {summary.games > 1 ? 's' : ''} classée{summary.games > 1 ? 's' : ''}
           </span>
@@ -128,7 +134,7 @@ export default function Home() {
       {summary ? (
         <StatsSummary stats={summary} comparison={comparison} />
       ) : (
-        <p className="rounded-lg border border-dashed border-ink-700 p-6 text-center text-sm text-ink-500">
+        <p className="rounded-xl border border-dashed border-line-strong p-6 text-center text-body text-faint">
           Aucune partie classée sur la période. Lancez une synchronisation depuis l’onglet Parties.
         </p>
       )}
@@ -136,36 +142,52 @@ export default function Home() {
       {/* The queue costs battery and only runs in the foreground, so the one
           thing this screen exists to prompt is starting it. */}
       {queued > 0 && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-accent/40 bg-accent/10 px-4 py-3">
-          <div className="flex-1 text-sm">
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-accent/40 bg-accent/10 px-4 py-3">
+          <div className="flex-1 text-body">
             {running ? (
-              <span className="text-ink-100">
+              <span className="text-text">
                 Analyse en cours · {processed} terminée(s)
                 {progress && ` · position ${progress.done}/${progress.total}`}
               </span>
             ) : (
               <>
-                <span className="text-ink-100">
+                <span className="text-text">
                   {queued} partie{queued > 1 ? 's' : ''} en attente d’analyse
                 </span>
-                <span className="text-ink-500"> · les statistiques les ignorent jusque-là.</span>
+                <span className="text-faint"> · les statistiques les ignorent jusque-là.</span>
               </>
             )}
           </div>
           {!running && (
-            <button
-              type="button"
-              onClick={start}
-              className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-ink-950"
-            >
+            <Button size="sm" variant="primary" onClick={start}>
               Analyser
-            </button>
+            </Button>
           )}
         </div>
       )}
 
+      {/* The weakness is the one thing on this screen addressed to the player
+          rather than to the archive, so the coach says it — same bubble as
+          under the board, so the voice is recognisably one voice. */}
+      {weakness && (
+        <Link to="/stats" className="block">
+          <CoachBubble
+            message={{
+              tone: 'neutral',
+              headline: `${weakness.charAt(0).toUpperCase()}${weakness.slice(1)}.`,
+              details: [
+                {
+                  text: 'Ouvrez les statistiques pour voir dans quelles positions cela arrive.',
+                  tone: 'neutral',
+                },
+              ],
+            }}
+          />
+        </Link>
+      )}
+
       {hasCurve && (
-        <Card to="/stats" title="Gaffes par partie" action="Voir les statistiques">
+        <HomeCard to="/stats" title="Gaffes par partie" action="Voir les statistiques">
           <div className="h-20">
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={curve} margin={{ top: 4, right: 0, bottom: 0, left: 0 }}>
@@ -173,9 +195,9 @@ export default function Home() {
                   formatter={(value) => [`${value} gaffes / partie`, '']}
                   labelFormatter={(key) => formatBucket(key, 'smooth')}
                   contentStyle={{
-                    background: 'var(--color-ink-900)',
-                    border: '1px solid var(--color-ink-700)',
-                    borderRadius: 6,
+                    background: 'var(--color-surface)',
+                    border: '1px solid var(--color-line-strong)',
+                    borderRadius: 8,
                     fontSize: 12,
                   }}
                 />
@@ -192,41 +214,35 @@ export default function Home() {
               </AreaChart>
             </ResponsiveContainer>
           </div>
-          <p className="text-xs text-ink-500">
+          <p className="text-label text-faint">
             Lissé sur la semaine autour de chaque jour, {CURVE_DAYS} derniers jours.
           </p>
-        </Card>
-      )}
-
-      {weakness && (
-        <Card to="/stats" title="Votre point faible" action="Détail">
-          <p className="text-sm text-ink-100 first-letter:uppercase">{weakness}.</p>
-        </Card>
+        </HomeCard>
       )}
 
       {replayable && (
-        <Card
+        <HomeCard
           to={`/games/${replayable.game_id}`}
           title="La dernière erreur à rejouer"
           action="Ouvrir la partie"
         >
-          <p className="text-sm">
-            <span className="font-mono text-ink-500">{replayable.move_number}.</span>{' '}
-            <span className="font-mono text-ink-100">{replayable.san}</span>{' '}
+          <p className="text-body leading-snug">
+            <span className="font-mono text-faint">{replayable.move_number}.</span>{' '}
+            <span className="font-mono text-text">{replayable.san}</span>{' '}
             <span className={JUDGMENT_CLASS[replayable.judgment]}>
               {JUDGMENT_LABEL[replayable.judgment]}
             </span>{' '}
-            <span className="text-ink-500">
+            <span className="text-faint">
               contre {replayable.opponent} — il fallait jouer {replayable.best_move_san}
             </span>
           </p>
-        </Card>
+        </HomeCard>
       )}
 
       <div className="flex flex-col gap-2">
         <div className="flex items-baseline justify-between">
-          <h2 className="text-sm font-medium text-ink-300">Dernières parties</h2>
-          <Link to="/games" className="text-xs text-accent">
+          <h2 className="text-body font-medium text-muted">Dernières parties</h2>
+          <Link to="/games" className="text-label text-accent">
             Tout l’historique
           </Link>
         </div>

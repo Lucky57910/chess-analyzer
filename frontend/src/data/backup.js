@@ -62,6 +62,11 @@ const ANALYSIS_COLUMNS = [
   "acpl_black",
   "judgment_counts",
   "phase_stats",
+  // The coach's commentary travels with the analysis it describes. It costs
+  // API quota to produce and nothing on the phone can recompute it, which puts
+  // it in the same class as the engine's own numbers: losing it in a restore
+  // would mean paying for it twice.
+  "coach",
   "created_at",
   "updated_at",
 ];

@@ -1,6 +1,6 @@
 import { Suspense, lazy } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
-import Navigation from './components/Navigation'
+import Navigation, { BottomBar } from './components/Navigation'
 import { useSettings } from './hooks/useSettings'
 
 // Split per route: the charting library only travels with the pages that draw
@@ -11,7 +11,11 @@ const GameAnalysis = lazy(() => import('./pages/GameAnalysis'))
 const Settings = lazy(() => import('./pages/Settings'))
 const Stats = lazy(() => import('./pages/Stats'))
 
-const Loading = <p className="p-8 text-sm text-ink-500">Chargement…</p>
+const Loading = (
+  <p className="p-8 text-body text-faint" role="status">
+    Chargement…
+  </p>
+)
 
 /**
  * There is no longer anything to protect.
@@ -27,8 +31,8 @@ function Shell({ children }) {
     return (
       <main className="mx-auto max-w-2xl px-4 py-10">
         <h1 className="text-lg font-medium text-blunder">Base de données inaccessible</h1>
-        <p className="mt-2 text-sm text-ink-300">{error}</p>
-        <p className="mt-4 text-xs text-ink-500">
+        <p className="mt-2 text-body text-muted">{error}</p>
+        <p className="mt-4 text-label text-faint">
           Fermez puis rouvrez l’application. Si le problème persiste, l’espace de stockage du
           téléphone est peut-être plein.
         </p>
@@ -40,9 +44,14 @@ function Shell({ children }) {
   return (
     <>
       <Navigation />
-      <main className="mx-auto max-w-7xl px-4 py-6">
+      {/* The bottom bar floats over the page, so the last card of every screen
+          would sit under it without this. `pb-24` is the bar plus a thumb's
+          worth of breathing room; the safe-area inset is added by the bar
+          itself. */}
+      <main className="mx-auto max-w-7xl px-4 pt-4 pb-24 lg:pb-8">
         <Suspense fallback={Loading}>{children}</Suspense>
       </main>
+      <BottomBar />
     </>
   )
 }

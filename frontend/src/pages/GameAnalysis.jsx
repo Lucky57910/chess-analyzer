@@ -1,15 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import Board from '../components/Board'
+import CoachBubble from '../components/CoachBubble'
 import EvalBar from '../components/EvalBar'
 import EvalGraph from '../components/EvalGraph'
+import Icon from '../components/Icon'
 import MoveList from '../components/MoveList'
 import Sparring from '../components/Sparring'
 import { StatTile } from '../components/StatsSummary'
+import Badge from '../components/ui/Badge'
+import Button from '../components/ui/Button'
+import { Card } from '../components/ui/Card'
+import Segmented from '../components/ui/Segmented'
+import { narrate } from '../coach/narrate.js'
+import { useSettings } from '../hooks/useSettings'
 import { useMediaQuery } from '../hooks/useMediaQuery'
 import { useQueue } from '../hooks/useQueue'
 import { motifsFor } from '../engine/motifs.js'
-import { bestLine, lineText, refutation } from '../engine/refutation.js'
+import { bestLine, refutation } from '../engine/refutation.js'
 import { api } from '../utils/api'
 import {
   JUDGMENT_CLASS,
@@ -29,101 +37,47 @@ const ACCURACY_NOTE =
   'et analyse plus profondément — quelques points d’écart sont normaux. ' +
   'Le « cp » est le centipion : 100 cp = 1 pion. À 30 cp perdus par coup, vous ' +
   'cédez l’équivalent d’un pion tous les trois coups.'
+
 const RESULT_LABEL = { win: 'Victoire', loss: 'Défaite', draw: 'Nulle' }
+const RESULT_TONE = { win: 'good', loss: 'bad', draw: 'neutral' }
 
-const PIECE_NAME = {
-  p: 'le pion',
-  n: 'le cavalier',
-  b: 'le fou',
-  r: 'la tour',
-  q: 'la dame',
-  k: 'le roi',
-}
+/** "1 coup commenté", "7 coups commentés". */
+const plural = (n, one, many) => `${n} ${n > 1 ? many : one}`
 
-const PIECE_LIST = (targets) =>
-  targets
-    .map((t) => PIECE_NAME[t.type])
-    .join(' et ')
-    .replace('le roi', 'le roi')
-
-/**
- * The French for a motif.
- *
- * Kept here rather than in the detector so that module can be tested on facts
- * instead of on wording, and so the wording can change without touching a
- * single thing that decides whether a motif is there at all.
- */
-const MOTIF_TEXT = {
-  checkmate: () => 'Échec et mat.',
-  castled: (m) => (m.long ? 'Roque du côté dame.' : 'Roque, le roi est à l’abri.'),
-  promoted: () => 'Promotion.',
-  rooksConnected: () => 'Ce coup lie les tours : elles se défendent l’une l’autre.',
-  rookOpenFile: (m) => `La tour prend la colonne ${m.file}, qui est ouverte.`,
-  passedPawn: (m) => `Le pion ${m.square} est passé : plus aucun pion adverse ne peut l’arrêter.`,
-  fork: (m) => `Ce coup fait une fourchette : ${PIECE_NAME[m.piece]} attaque ${PIECE_LIST(m.targets)}.`,
-  pin: (m) => `Ce coup cloue ${PIECE_NAME[m.pinnedType]} contre ${PIECE_NAME[m.againstType]}.`,
-  hangs: (m) =>
-    m.moved
-      ? `Ce coup pose ${PIECE_NAME[m.victim]} en ${m.square} là où il peut être pris.`
-      : `Ce coup laisse ${PIECE_NAME[m.victim]} en prise en ${m.square}.`,
-  allowsFork: (m) =>
-    `Ce coup permet ${m.san} : une fourchette sur ${PIECE_LIST(m.targets)}.`,
-  missedMate: (m) => `Il y avait mat en un avec ${m.san}.`,
-}
-
-/** What a motif found inside a variation is, said about that variation. */
-const MOMENT_TEXT = {
-  checkmate: () => 'et c’est mat',
-  fork: (m) => `une fourchette sur ${PIECE_LIST(m.targets)}`,
-  pin: (m) => `ce qui cloue ${PIECE_NAME[m.pinnedType]}`,
-  hangs: (m) => `et ${PIECE_NAME[m.victim]} tombe`,
-  promoted: () => 'et le pion passe dame',
-  passedPawn: () => 'et le pion est passé',
-}
-
-const momentText = (moment) => (moment ? MOMENT_TEXT[moment.motif.key]?.(moment.motif) : null)
-
-/** Red for what the move gave away, plain for what it achieved. */
-const MOTIF_TONE = { opponent: 'text-blunder', you: 'text-ink-300' }
-
-function NavButton({ children, ...props }) {
-  return (
-    <button
-      type="button"
-      className="rounded-md border border-ink-700 px-2.5 py-1 text-sm text-ink-300 hover:bg-ink-800 disabled:opacity-40 sm:px-3 sm:py-1.5"
-      {...props}
-    >
-      {children}
-    </button>
-  )
-}
+/** The two lists beside the board, as one panel with two tabs. */
+const TABS = [
+  { key: 'moves', label: 'Coups' },
+  { key: 'mistakes', label: 'Vos coups manqués' },
+]
 
 function MistakeTimeline({ moves, userColor, currentPly, onSelectPly }) {
   const mine = moves.filter((m) => m.judgment && m.color === userColor)
   if (!mine.length) {
-    return <p className="px-3 py-4 text-sm text-ink-500">Aucune erreur majeure détectée.</p>
+    return <p className="px-4 py-6 text-body text-faint">Aucune erreur majeure détectée.</p>
   }
   return (
-    <ul className="divide-y divide-ink-800">
+    <ul className="divide-y divide-line">
       {mine.map((m) => (
         <li key={m.ply}>
           <button
             type="button"
             onClick={() => onSelectPly(m.ply)}
-            className={`flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-ink-800 ${
-              m.ply === currentPly ? 'bg-ink-800' : ''
+            className={`flex min-h-11 w-full flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 px-4 py-2 text-left text-body transition-colors hover:bg-raised ${
+              m.ply === currentPly ? 'bg-raised' : ''
             }`}
           >
             <span>
-              <span className="font-mono text-ink-500">
+              <span className="font-mono text-faint">
                 {m.move_number}
-                {m.color === 'white' ? '.' : '...'}
+                {m.color === 'white' ? '.' : '…'}
               </span>{' '}
-              <span className="font-mono text-ink-100">{m.san}</span>{' '}
+              <span className="font-mono text-text">{m.san}</span>{' '}
               <span className={JUDGMENT_CLASS[m.judgment]}>{JUDGMENT_LABEL[m.judgment]}</span>
             </span>
-            <span className="shrink-0 font-mono text-xs text-ink-500">
-              −{(m.cp_loss / 100).toFixed(2)} · {m.best_move_san}
+            {/* Wraps onto its own line on a narrow screen rather than being
+                cut: "mieux : Cf3" is the half that says what to do instead. */}
+            <span className="font-mono text-label text-faint">
+              −{(m.cp_loss / 100).toFixed(2)} · mieux : {m.best_move_san}
             </span>
           </button>
         </li>
@@ -144,9 +98,16 @@ export default function GameAnalysis() {
   // fall out of the comparison instead of needing an effect to undo it.
   const [bestPeekPly, setBestPeekPly] = useState(null)
   const [error, setError] = useState(null)
+  const [tab, setTab] = useState('moves')
   const [showGraph, setShowGraph] = useState(false)
   const [sparringFrom, setSparringFrom] = useState(null)
+  // The coach's own state. `coachNotes` shadows what the analysis carried so a
+  // freshly generated commentary appears without reloading the game.
+  const [coachNotes, setCoachNotes] = useState(null)
+  const [coachBusy, setCoachBusy] = useState(false)
+  const [coachStatus, setCoachStatus] = useState(null)
   const isDesktop = useMediaQuery('(min-width: 1024px)')
+  const { settings: appSettings } = useSettings()
   const { running: queueRunning, stop: stopQueue } = useQueue()
   const touchStart = useRef(null)
 
@@ -154,7 +115,11 @@ export default function GameAnalysis() {
     try {
       const g = await api.game(gameId)
       setGame(g)
-      if (g.analysis_status === 'done') setAnalysis(await api.analysis(gameId))
+      if (g.analysis_status === 'done') {
+        const found = await api.analysis(gameId)
+        setAnalysis(found)
+        setCoachNotes(found.coach ?? {})
+      }
     } catch (err) {
       setError(err.message)
     }
@@ -166,7 +131,8 @@ export default function GameAnalysis() {
 
   // Poll while Stockfish is still working on this game.
   useEffect(() => {
-    if (!game || game.analysis_status === 'done' || game.analysis_status === 'error') return undefined
+    if (!game || game.analysis_status === 'done' || game.analysis_status === 'error')
+      return undefined
     const id = setInterval(load, 4000)
     return () => clearInterval(id)
   }, [game, load])
@@ -176,24 +142,42 @@ export default function GameAnalysis() {
     return mergeMoves(positionsFromPgn(game.pgn), analysis?.moves)
   }, [game, analysis])
 
-  // Worked out for the ply on screen and nothing else. It is pure geometry
-  // over chess.js, so it costs a few positions rather than an engine call, and
-  // it works on games analysed long before this existed - nothing about it is
-  // stored.
+  /**
+   * What has already been worked out, per ply.
+   *
+   * The detectors are pure geometry over chess.js - no engine call - but they
+   * are not cheap: one `motifsFor` walks every legal move for the mate check
+   * and costs about 12 ms here, and a single ply needs one for the board plus
+   * one per replayed step of both engine lines. Stepping back and forth over
+   * the same three moves, which is exactly how this screen is used, paid that
+   * again every time.
+   *
+   * Keyed on `moves`, so the analysis arriving mid-poll throws the cache away
+   * rather than serving results computed from the unanalysed plies.
+   */
+  const cache = useMemo(() => new Map(), [moves])
+
+  // Worked out for the ply on screen and nothing else. It works on games
+  // analysed long before this existed - nothing about it is stored.
   const motifs = useMemo(() => {
     const current = ply > 0 ? moves[ply - 1] : null
     if (!current?.move) return []
+    const key = `motifs:${ply}`
+    if (cache.has(key)) return cache.get(key)
+    let found = []
     try {
-      return motifsFor({
+      found = motifsFor({
         before: current.fen_before,
         after: current.fen_after,
         move: current.move,
       })
     } catch {
       // A motif is a nicety; it must never be the reason a game will not open.
-      return []
+      found = []
     }
-  }, [moves, ply])
+    cache.set(key, found)
+    return found
+  }, [cache, moves, ply])
 
   // The engine's own line, replayed. Present only on judged moves of games
   // analysed since the driver started keeping the variation - everything older
@@ -201,15 +185,20 @@ export default function GameAnalysis() {
   const lines = useMemo(() => {
     const current = ply > 0 ? moves[ply - 1] : null
     if (!current) return { refutation: null, best: null }
+    const key = `lines:${ply}`
+    if (cache.has(key)) return cache.get(key)
+    let found = { refutation: null, best: null }
     try {
-      return {
+      found = {
         refutation: refutation(current, current.fen_after),
         best: current.is_best ? null : bestLine(current, current.fen_before),
       }
     } catch {
-      return { refutation: null, best: null }
+      found = { refutation: null, best: null }
     }
-  }, [moves, ply])
+    cache.set(key, found)
+    return found
+  }, [cache, moves, ply])
 
   const goTo = useCallback(
     (next) => setPly(Math.max(0, Math.min(moves.length, next))),
@@ -269,8 +258,8 @@ export default function GameAnalysis() {
     return () => clearTimeout(id)
   }, [playing, ply, moves.length])
 
-  if (error) return <p className="text-sm text-blunder">{error}</p>
-  if (!game) return <p className="text-sm text-ink-500">Chargement…</p>
+  if (error) return <p className="text-body text-blunder">{error}</p>
+  if (!game) return <p className="text-body text-faint">Chargement…</p>
 
   const current = ply > 0 ? moves[ply - 1] : null
   const previous = ply > 1 ? moves[ply - 2] : null
@@ -282,9 +271,7 @@ export default function GameAnalysis() {
   // `bestPeekPly` no longer matches.
   const bestAvailable = Boolean(current?.best_move_uci) && !current?.is_best
   const showingBest = bestPeekPly === ply && bestAvailable
-  const fen = showingBest
-    ? (previous?.fen_after ?? START_FEN)
-    : (current?.fen_after ?? START_FEN)
+  const fen = showingBest ? (previous?.fen_after ?? START_FEN) : (current?.fen_after ?? START_FEN)
   const lastMove = showingBest ? previous?.uci : current?.uci
   const shapes = showingBest
     ? [
@@ -295,6 +282,44 @@ export default function GameAnalysis() {
         },
       ]
     : []
+
+  // What the coach says about the ply on screen. Everything it needs was
+  // already computed above; this only ranks and words it. A generated
+  // paragraph leads when there is one for this ply, with the engine's own
+  // sentences kept underneath it rather than replaced.
+  const aiText = current ? (coachNotes?.[current.ply] ?? null) : null
+  const message = current ? narrate({ move: current, motifs, lines, aiText }) : null
+
+  const coachReady = Boolean(appSettings?.coach?.key_set)
+  const commentedPlies = Object.keys(coachNotes ?? {}).length
+
+  async function askCoach() {
+    setCoachBusy(true)
+    setCoachStatus(null)
+    try {
+      const result = await api.coachGame(gameId, {
+        onProgress: (done, total) => setCoachStatus(`Rédaction… ${done}/${total}`),
+        // A pause with no explanation reads as a frozen button, and this one
+        // can last half a minute.
+        onWait: (seconds) => setCoachStatus(`Limite du modèle atteinte, reprise dans ${seconds} s…`),
+      })
+      setCoachNotes(result.notes)
+      // The total, not just what this run added: a second run over a partly
+      // commented game adds two and the bubble then shows seven, and a status
+      // line saying "2" reads as the coverage rather than as the delta.
+      const total = Object.keys(result.notes).length
+      setCoachStatus(
+        result.failed
+          ? `${plural(total, 'coup commenté', 'coups commentés')} sur la partie, ` +
+            `${result.failed} lot(s) en échec.`
+          : `${plural(total, 'coup commenté', 'coups commentés')} sur la partie.`,
+      )
+    } catch (err) {
+      setCoachStatus(err.message)
+    } finally {
+      setCoachBusy(false)
+    }
+  }
 
   const counts = analysis?.judgment_counts?.[userColor] || {}
   const accuracy = userColor === 'white' ? analysis?.accuracy_white : analysis?.accuracy_black
@@ -313,53 +338,81 @@ export default function GameAnalysis() {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <div>
-          <h1 className="text-xl font-semibold">
-            {RESULT_LABEL[game.result]} contre {game.opponent_username}
-            {game.opponent_rating ? (
-              <span className="text-ink-500"> ({game.opponent_rating})</span>
-            ) : null}
+      {/* The header is two lines and a row of icon actions. It used to be two
+          lines and three labelled buttons, which on a 375px screen spent a
+          third of the fold on navigation. */}
+      <div className="flex items-start gap-2">
+        <Button
+          to="/games"
+          size="icon"
+          variant="ghost"
+          icon="back"
+          aria-label="Retour à la liste des parties"
+          className="-ml-2 shrink-0"
+        />
+        <div className="min-w-0 flex-1">
+          <h1 className="flex flex-wrap items-center gap-2 text-lead font-semibold">
+            <Badge tone={RESULT_TONE[game.result]}>{RESULT_LABEL[game.result]}</Badge>
+            <span className="text-text">
+              contre {game.opponent_username}
+              {game.opponent_rating ? (
+                <span className="text-faint"> ({game.opponent_rating})</span>
+              ) : null}
+            </span>
           </h1>
-          <p className="text-sm text-ink-500">
+          {/* Wraps. This line carries the opening name, which is the piece of
+              it worth reading and the first thing an ellipsis would eat. */}
+          <p className="mt-0.5 text-label leading-snug text-faint">
             {new Date(game.played_at).toLocaleString('fr-FR')} · {game.time_class} ·{' '}
             {game.opening || 'ouverture inconnue'}
             {game.termination ? ` · ${game.termination}` : ''}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex shrink-0 gap-1">
           {game.url && (
-            <a
+            <Button
               href={game.url}
-              target="_blank"
-              rel="noreferrer"
-              className="rounded-md border border-ink-700 px-3 py-1.5 text-sm text-ink-300 hover:bg-ink-800"
-            >
-              Voir sur Chess.com
-            </a>
+              size="icon"
+              variant="ghost"
+              icon="external"
+              aria-label="Voir la partie sur Chess.com"
+            />
           )}
-          <button
-            type="button"
+          <Button
+            size="icon"
+            variant="ghost"
+            icon="refresh"
+            aria-label="Ré-analyser la partie"
             onClick={async () => {
               await api.refresh(gameId)
               setAnalysis(null)
+              // The commentary goes with it. `saveAnalysis` clears the stored
+              // one because the judgments it describes are about to change,
+              // and `load` will not overwrite this state until the new
+              // analysis is done - so without this the old paragraphs stay on
+              // screen, describing a verdict that no longer exists, for as
+              // long as the queue takes.
+              setCoachNotes(null)
+              setCoachStatus(null)
               load()
             }}
-            className="rounded-md border border-ink-700 px-3 py-1.5 text-sm text-ink-300 hover:bg-ink-800"
-          >
-            Ré-analyser
-          </button>
-          <Link
-            to="/games"
-            className="rounded-md border border-ink-700 px-3 py-1.5 text-sm text-ink-300 hover:bg-ink-800"
-          >
-            Retour
-          </Link>
+          />
         </div>
       </div>
 
       {game.analysis_status !== 'done' && (
-        <p className="rounded-md border border-ink-700 bg-ink-900 px-3 py-2 text-sm text-ink-300">
+        <p
+          className={`flex items-start gap-2 rounded-lg border px-3 py-2 text-body ${
+            game.analysis_status === 'error'
+              ? 'border-blunder/40 bg-blunder/10 text-blunder'
+              : 'border-line-strong bg-surface text-muted'
+          }`}
+        >
+          <Icon
+            name={game.analysis_status === 'error' ? 'warning' : 'coach'}
+            size={16}
+            className="mt-0.5"
+          />
           {game.analysis_status === 'error'
             ? `Analyse en échec : ${game.analysis_error}`
             : 'Analyse Stockfish en cours… le graphique apparaîtra automatiquement.'}
@@ -371,7 +424,7 @@ export default function GameAnalysis() {
       <div className="flex flex-col gap-4 lg:grid lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start">
         {/* Board first and pinned: scrolling the move list or the mistake
             timeline must never push the position off screen. */}
-        <section className="sticky top-0 z-20 order-1 -mx-4 flex flex-col gap-2 border-b border-ink-800 bg-ink-950 px-4 pb-2 lg:static lg:z-auto lg:order-none lg:col-start-1 lg:row-start-1 lg:mx-0 lg:border-0 lg:px-0 lg:pb-0">
+        <section className="sticky top-[calc(3.5rem+env(safe-area-inset-top,0px))] z-20 order-1 -mx-4 flex flex-col gap-2 border-b border-line bg-canvas px-4 pb-2 lg:static lg:z-auto lg:order-none lg:col-start-1 lg:row-start-1 lg:mx-0 lg:border-0 lg:px-0 lg:pb-0">
           {sparringFrom ? (
             <Sparring
               startFen={sparringFrom}
@@ -380,121 +433,194 @@ export default function GameAnalysis() {
               onExit={() => setSparringFrom(null)}
             />
           ) : (
-          <>
-          <div
-            className="mx-auto flex w-full max-w-[min(46vh,30rem)] touch-pan-y gap-2 lg:max-w-[min(52vh,30rem)]"
-            onTouchStart={onTouchStart}
-            onTouchMove={onTouchMove}
-            onTouchEnd={onTouchEnd}
-            onTouchCancel={onTouchCancel}
-          >
-            <EvalBar move={current} orientation={orientation} />
-            <div className="min-w-0 flex-1">
-              <Board fen={fen} orientation={orientation} lastMove={lastMove} shapes={shapes} />
-            </div>
-          </div>
+            <>
+              <div
+                className="mx-auto flex w-full max-w-[min(42vh,30rem)] touch-pan-y gap-2 lg:max-w-[min(52vh,30rem)]"
+                onTouchStart={onTouchStart}
+                onTouchMove={onTouchMove}
+                onTouchEnd={onTouchEnd}
+                onTouchCancel={onTouchCancel}
+              >
+                <EvalBar move={current} orientation={orientation} />
+                <div className="min-w-0 flex-1">
+                  <Board fen={fen} orientation={orientation} lastMove={lastMove} shapes={shapes} />
+                </div>
+              </div>
 
-          <div className="flex flex-wrap items-center gap-1.5 sm:gap-2">
-            <NavButton onClick={() => goTo(0)} disabled={ply === 0}>
-              ⏮
-            </NavButton>
-            <NavButton onClick={() => goTo(ply - 1)} disabled={ply === 0}>
-              ◀
-            </NavButton>
-            <NavButton onClick={() => setPlaying(!playing)} disabled={ply >= moves.length}>
-              {playing ? '⏸' : '▶'}
-            </NavButton>
-            <NavButton onClick={() => goTo(ply + 1)} disabled={ply >= moves.length}>
-              ▶
-            </NavButton>
-            <NavButton onClick={() => goTo(moves.length)} disabled={ply >= moves.length}>
-              ⏭
-            </NavButton>
-            <NavButton onClick={() => setFlipped(!flipped)}>
-              ⇅<span className="hidden sm:inline"> Retourner</span>
-            </NavButton>
-            <NavButton
-              onClick={() => {
-                // The engine has one search state and the driver serialises
-                // every call, so a rally queued behind a whole game's analysis
-                // would wait minutes for its first reply.
-                if (queueRunning) stopQueue()
-                setSparringFrom(fen)
-              }}
-              title="Reprenez la position et jouez la suite contre Stockfish."
-            >
-              ♟<span className="hidden sm:inline"> Jouer d’ici</span>
-            </NavButton>
-            <NavButton
-              onClick={() => setBestPeekPly(showingBest ? null : ply)}
-              disabled={!bestAvailable}
-              title={
-                bestAvailable
-                  ? 'Affiche le coup que Stockfish jouait ici. Revient au coup joué dès que vous avancez.'
-                  : current?.is_best
-                    ? 'Vous avez joué le meilleur coup ici.'
-                    : 'Rien à comparer sur cette position.'
-              }
-            >
-              {showingBest ? 'Revenir au coup joué' : 'Voir le meilleur coup'}
-            </NavButton>
-            <span className="ml-auto font-mono text-sm text-ink-300">
-              {ply} / {moves.length} · {formatEval(current)}
-            </span>
-          </div>
+              {/* Walking the game is one fixed row of icons the thumb learns.
+                  The two controls whose labels change sit on their own row, so
+                  they cannot shuffle the arrows out from under it. */}
+              <div className="flex items-center gap-0.5">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  icon="first"
+                  aria-label="Début de la partie"
+                  onClick={() => goTo(0)}
+                  disabled={ply === 0}
+                />
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  icon="previous"
+                  aria-label="Coup précédent"
+                  onClick={() => goTo(ply - 1)}
+                  disabled={ply === 0}
+                />
+                <Button
+                  size="icon"
+                  variant="secondary"
+                  icon={playing ? 'pause' : 'play'}
+                  aria-label={playing ? 'Mettre la lecture en pause' : 'Dérouler la partie'}
+                  onClick={() => setPlaying(!playing)}
+                  disabled={ply >= moves.length}
+                />
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  icon="next"
+                  aria-label="Coup suivant"
+                  onClick={() => goTo(ply + 1)}
+                  disabled={ply >= moves.length}
+                />
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  icon="last"
+                  aria-label="Fin de la partie"
+                  onClick={() => goTo(moves.length)}
+                  disabled={ply >= moves.length}
+                />
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  icon="flip"
+                  aria-label="Retourner l’échiquier"
+                  onClick={() => setFlipped(!flipped)}
+                />
+                <span className="ml-auto font-mono text-body text-muted tabular-nums">
+                  {ply} / {moves.length} · {formatEval(current)}
+                </span>
+              </div>
 
-          {/* What the move did, in words. The judgment above says a move was
-              bad; this says what about it was. Belongs to the game being
-              reviewed, so it goes with the rest of it when the board is handed
-              over to a rally. */}
-          {(motifs.length > 0 || lines.refutation || lines.best) && (
-            <ul className="flex flex-col gap-0.5 text-xs">
-              {motifs.map((motif) => (
-                <li key={motif.key} className={MOTIF_TONE[motif.side]}>
-                  {MOTIF_TEXT[motif.key]?.(motif)}
-                </li>
-              ))}
-
-              {/* What the engine says happens next. This is the half a
-                  position alone cannot give: a piece is not lost on the move
-                  that hangs it, it is lost two plies later. */}
-              {lines.refutation && (
-                <li className="text-blunder">
-                  L’adversaire enchaîne {lineText(lines.refutation.steps)}
-                  {momentText(lines.refutation.moment)
-                    ? ` : ${momentText(lines.refutation.moment)}.`
-                    : '.'}
-                </li>
-              )}
-              {lines.best && (
-                <li className="text-good">
-                  Il fallait jouer {lineText(lines.best.steps)}
-                  {momentText(lines.best.moment)
-                    ? ` : ${momentText(lines.best.moment)}.`
-                    : '.'}
-                </li>
-              )}
-            </ul>
-          )}
-          </>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  size="sm"
+                  icon="hint"
+                  onClick={() => setBestPeekPly(showingBest ? null : ply)}
+                  disabled={!bestAvailable}
+                >
+                  {showingBest ? 'Revenir au coup joué' : 'Voir le meilleur coup'}
+                </Button>
+                <Button
+                  size="sm"
+                  icon="spar"
+                  aria-label="Jouer d’ici contre Stockfish"
+                  onClick={() => {
+                    // The engine has one search state and the driver serialises
+                    // every call, so a rally queued behind a whole game's
+                    // analysis would wait minutes for its first reply.
+                    if (queueRunning) stopQueue()
+                    setSparringFrom(fen)
+                  }}
+                >
+                  Jouer d’ici
+                </Button>
+                {/* This used to be a `title`, which on a phone is nothing at
+                    all: the button was simply dead with no reason given. */}
+                {!bestAvailable && current && (
+                  <span className="text-label text-faint">
+                    {current.is_best
+                      ? 'Vous avez joué le meilleur coup ici.'
+                      : 'Rien à comparer sur cette position.'}
+                  </span>
+                )}
+              </div>
+            </>
           )}
         </section>
 
-        <div className="order-2 h-56 rounded-lg border border-ink-800 bg-ink-900 lg:order-none lg:col-start-2 lg:row-start-1 lg:h-80">
-          <MoveList moves={moves} currentPly={ply} onSelectPly={setPly} />
-        </div>
+        {/* What the move did, in words — and the reason this screen exists.
+            Directly under the board, at reading size, with the verdict on it.
+            The coach's controls sit under the bubble rather than inside it, so
+            they are reachable from the starting position too. */}
+        {!sparringFrom && (
+          <div className="order-2 flex flex-col gap-2 lg:order-none lg:col-start-1 lg:row-start-2">
+            {current && (
+              <CoachBubble
+                message={message}
+                san={current.san}
+                moveNumber={current.move_number}
+                color={current.color}
+                pending={coachBusy && !aiText}
+              />
+            )}
 
-        <div className="order-3 rounded-lg border border-ink-800 bg-ink-900 lg:order-none lg:col-start-2 lg:row-start-2 lg:row-span-2">
-          <h3 className="border-b border-ink-700 px-3 py-2 text-sm font-medium text-ink-300">
-            Vos coups manqués
-          </h3>
-          <MistakeTimeline
-            moves={moves}
-            userColor={userColor}
-            currentPly={ply}
-            onSelectPly={setPly}
-          />
-        </div>
+            {analysis && (
+              <div className="flex flex-wrap items-center gap-2 sm:pl-12">
+                {/* The generated commentary is bought with a daily quota and
+                    stored once, so this is a button rather than something that
+                    fires on opening a game. */}
+                {coachReady ? (
+                  <Button
+                    size="sm"
+                    variant={commentedPlies ? 'ghost' : 'primary'}
+                    icon="coach"
+                    onClick={askCoach}
+                    disabled={coachBusy}
+                  >
+                    {coachBusy
+                      ? 'Le coach écrit…'
+                      : commentedPlies
+                        ? 'Refaire commenter la partie'
+                        : 'Faire commenter par le coach'}
+                  </Button>
+                ) : (
+                  <Button size="sm" variant="ghost" icon="coach" to="/settings">
+                    Activer le coach IA
+                  </Button>
+                )}
+                {commentedPlies > 0 && !coachBusy && !coachStatus && (
+                  <span className="text-label text-faint">
+                    {plural(commentedPlies, 'coup commenté', 'coups commentés')} par le coach.
+                  </span>
+                )}
+                {coachStatus && (
+                  <span className="text-label text-faint" role="status">
+                    {coachStatus}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* The move list and the mistake list were two stacked panels, which on
+            a phone is two scroll areas fighting the page for the same thumb.
+            One panel with two tabs: nothing is gone, half the height. */}
+        <Card className="order-3 overflow-hidden lg:order-none lg:col-start-2 lg:row-start-1 lg:row-span-4">
+          <div className="border-b border-line-strong p-2">
+            <Segmented
+              label="Ce qui est listé à côté de l’échiquier"
+              value={tab}
+              options={TABS}
+              onChange={setTab}
+              block
+            />
+          </div>
+          <div className="h-64 overflow-y-auto lg:h-[30rem]">
+            {tab === 'moves' ? (
+              <MoveList moves={moves} currentPly={ply} onSelectPly={setPly} />
+            ) : (
+              <MistakeTimeline
+                moves={moves}
+                userColor={userColor}
+                currentPly={ply}
+                onSelectPly={setPly}
+              />
+            )}
+          </div>
+        </Card>
 
         {analysis && (
           <div className="order-4 grid grid-cols-2 gap-3 lg:order-none lg:col-start-1 lg:row-start-3 lg:grid-cols-4">
@@ -502,7 +628,7 @@ export default function GameAnalysis() {
               label="Précision"
               value={accuracy != null ? `${accuracy}%` : null}
               hint={accuracyHint || undefined}
-              title={ACCURACY_NOTE}
+              note={ACCURACY_NOTE}
               tone={accuracy >= 85 ? 'good' : accuracy >= 70 ? 'warn' : 'bad'}
             />
             <StatTile label="Imprécisions" value={counts.inaccuracy ?? 0} />
@@ -523,18 +649,21 @@ export default function GameAnalysis() {
         {/* The eval bar already tracks domination move by move, so on a phone the
             curve is opt-in and sits last instead of stealing the fold. */}
         {analysis && (
-          <section className="order-5 flex flex-col gap-2 lg:order-none lg:col-start-1 lg:row-start-2">
-            <button
-              type="button"
+          <section className="order-5 flex flex-col gap-2 lg:order-none lg:col-start-1 lg:row-start-4">
+            <Button
+              size="sm"
+              variant="ghost"
+              icon={showGraph ? 'chevronUp' : 'chevronDown'}
               onClick={() => setShowGraph(!showGraph)}
-              className="rounded-md border border-ink-700 px-3 py-1.5 text-sm text-ink-300 hover:bg-ink-800 lg:hidden"
+              aria-expanded={showGraph}
+              className="self-start lg:hidden"
             >
               {showGraph ? 'Masquer la courbe' : 'Afficher la courbe d’évaluation'}
-            </button>
+            </Button>
             {(showGraph || isDesktop) && (
-              <div className="rounded-lg border border-ink-800 bg-ink-900 p-2">
+              <Card className="p-2">
                 <EvalGraph moves={moves} currentPly={ply} onSelectPly={setPly} />
-              </div>
+              </Card>
             )}
           </section>
         )}

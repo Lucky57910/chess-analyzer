@@ -10,6 +10,7 @@
 import { CapacitorSQLite, SQLiteConnection } from "@capacitor-community/sqlite";
 import { CapacitorHttp, registerPlugin } from "@capacitor/core";
 
+import { createCoach } from "../coach/client.js";
 import { createStockfish } from "../engine/stockfish.js";
 import { createClient } from "./chessCom.js";
 import { createRepository, migrate } from "./db.js";
@@ -78,12 +79,17 @@ export async function createApp({ threads = 1, hashMb = 128, settings } = {}) {
   const store = createGameStore(repo);
   const client = createClient(CapacitorHttp);
   const engine = createStockfish(Stockfish, { threads, hashMb });
+  // Through the native HTTP plugin rather than `fetch`, for the same reason
+  // the Chess.com client goes that way: the WebView origin is not the model
+  // provider's, and no provider sends CORS headers for it.
+  const coach = createCoach(CapacitorHttp);
 
   return {
     repo,
     store,
     client,
     engine,
+    coach,
     settings,
     evaluate: engine.evaluate,
     async close() {

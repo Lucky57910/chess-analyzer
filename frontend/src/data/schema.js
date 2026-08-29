@@ -11,7 +11,7 @@
  * repository parses on the way out so callers never see the encoding.
  */
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 /**
  * The version handed to the SQLite plugin, which is not our schema version.
@@ -101,7 +101,14 @@ CREATE TABLE IF NOT EXISTS analyses (
 `;
 
 /** Columns holding JSON, parsed on read and stringified on write. */
-export const JSON_COLUMNS = ["moves", "errors", "blunders", "judgment_counts", "phase_stats"];
+export const JSON_COLUMNS = [
+  "moves",
+  "errors",
+  "blunders",
+  "judgment_counts",
+  "phase_stats",
+  "coach",
+];
 
 /**
  * Everything that has happened to the schema since version 1.
@@ -154,6 +161,21 @@ export const MIGRATIONS = [
       // its own for the override rather than editing this one in place.
       await driver.execute("UPDATE games SET game_kind = 'training' WHERE rated = 0");
       await driver.execute("CREATE INDEX IF NOT EXISTS ix_games_kind ON games (game_kind);");
+    },
+  },
+  {
+    version: 4,
+    name: "keep the coach's commentary beside the analysis",
+    // One JSON object per game, keyed by ply. It belongs on `analyses` rather
+    // than in a table of its own because its lifetime is the analysis's: a
+    // re-analysis at a deeper level renews the moves the commentary describes,
+    // and `saveAnalysis` overwrites the row, which drops it.
+    //
+    // Nullable with a default, per rule 2 above: a backup taken before this
+    // existed restores without it, and a phone that downgrades keeps every
+    // other column readable.
+    run: async (driver, { addColumn }) => {
+      await addColumn(driver, "analyses", "coach", "TEXT NOT NULL DEFAULT '{}'");
     },
   },
 ];

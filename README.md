@@ -2,11 +2,13 @@
 
 An Android app that imports your Chess.com games, runs Stockfish over every
 position, and shows where the games were actually decided: evaluation curve,
-per-move judgments, accuracy, and the phase you keep losing points in.
+per-move judgments, accuracy, and the phase you keep losing points in. It can
+also write a coach's paragraph on each of your moves — see [The coach](#the-coach).
 
-Everything runs on the phone. The engine, the database and the analysis are all
-local; the only network call is to Chess.com's public archive. There is no
-account, no server, and no hosting bill.
+Everything that matters runs on the phone. The engine, the database and the
+analysis are all local; there is no account, no server, and no hosting bill.
+Two network calls exist: Chess.com's public archive, and — only if you turn the
+coach on and supply your own key — a language-model provider.
 
 ## Install
 
@@ -27,7 +29,8 @@ phone's own CPU.
 ```
 React + Vite  ──►  Capacitor WebView  ──┬──►  SQLite          (@capacitor-community/sqlite)
                                         ├──►  Stockfish 17.1  (native binary, UCI over a pipe)
-                                        └──►  api.chess.com   (CapacitorHttp, so no CORS)
+                                        ├──►  api.chess.com   (CapacitorHttp, so no CORS)
+                                        └──►  Gemini / OpenRouter   (optional, your own key)
 ```
 
 Three things about that are worth knowing before changing any of it.
@@ -67,13 +70,51 @@ This model was ported from a Python backend that no longer exists in the tree.
 It is pinned to `frontend/src/engine/__fixtures__/golden.json`, a recording of
 that backend's output, and the port is tested against it move by move.
 
+
+## The coach
+
+Stockfish says a move cost 240 centipawns. It cannot say that you played it in
+two seconds, that your king has been on e1 since move one, or what to do
+differently next time. That part is written by a language model — optionally,
+and under tight constraints.
+
+**It never sees the game.** The model is not given the PGN, a FEN, or a board.
+It is given a list of facts already computed on the phone: what the engine
+evaluated, what the move cost, what it wanted instead, which motifs the
+detectors found, how the opponent punishes it, how long the move took (off the
+`[%clk]` tags in the PGN) and what the pawn structure and king safety look
+like. It rewrites those facts as advice. It cannot miscalculate, because it
+never calculates.
+
+This matters more than it sounds. Measured on chess commentary, unaided
+frontier models produce factually wrong sub-claims 10–22% of the time, and
+smaller ones 35–55%; giving them engine output roughly halves that. Not letting
+them near the board at all is the same idea taken further.
+
+Answers are checked before they are believed — a comment about a move that was
+not asked about, or one that ran long, is dropped rather than shown. **With no
+key configured, nothing changes:** the app keeps explaining moves from the
+engine's own findings, which is what it did before the coach existed.
+
+**Setting it up.** Réglages → Coach IA. The default is Google's Gemini free
+tier: a key from [AI Studio](https://aistudio.google.com/apikey), no card, and
+roughly a thousand requests a day — a game costs one or two, because moves are
+batched, not sent one at a time. OpenRouter's `:free` models work too.
+
+**Two things to know before you turn it on.** The key is stored in the app's
+private SQLite in plain text — protected by the Android sandbox and the
+device's disk encryption, not by a separate secret. And on Google's *free*
+tier, what you send is used to improve their products; your games go to them
+and are trained on. The paid tier does not do this. No key is committed to this
+repository or built into the APK.
+
 ## Development
 
 ```bash
 cd frontend
 npm install
 npm run dev        # http://localhost:5173
-npm test           # 158 tests, no device needed
+npm test           # 467 tests, no device needed
 npm run lint
 ```
 

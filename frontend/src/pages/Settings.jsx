@@ -1,9 +1,138 @@
 import { useEffect, useRef, useState } from 'react'
+import Button from '../components/ui/Button'
+import { Panel } from '../components/ui/Card'
+import Segmented from '../components/ui/Segmented'
+import { PROVIDERS } from '../coach/providers.js'
 import { backupFilename } from '../data/backup'
 import { saveAndShare } from '../data/share'
 import { useQueue } from '../hooks/useQueue'
 import { useSettings } from '../hooks/useSettings'
 import { api } from '../utils/api'
+
+const inputClass =
+  'min-h-11 w-full rounded-lg border border-line-strong bg-canvas px-3 text-body text-text placeholder:text-faint'
+
+/**
+ * The coach's provider, model and key.
+ *
+ * The key is write-only: the field is empty on arrival and the screen says
+ * whether one is stored rather than showing it. There is nothing to gain from
+ * rendering a secret that is only ever sent to one host, and a screenshot of
+ * this page should not be a leak.
+ */
+function CoachSettings({ config, onSave, busy }) {
+  const [provider, setProvider] = useState(config?.provider ?? 'gemini')
+  const [model, setModel] = useState(config?.model ?? '')
+  const [key, setKey] = useState('')
+  const adapter = PROVIDERS[provider] ?? PROVIDERS.gemini
+
+  // Picking a provider resets the model, because a model name belongs to one
+  // provider and the stored one is cleared on the same event.
+  function pickProvider(next) {
+    setProvider(next)
+    setModel(PROVIDERS[next].models[0])
+  }
+
+  return (
+    <Panel
+      title="Coach IA"
+      hint="Un commentaire écrit pour chacun de vos coups, à partir de ce que Stockfish a trouvé. Facultatif : sans clé, l’application continue d’expliquer les coups avec le moteur seul."
+      bodyClass="flex flex-col gap-4 p-4"
+    >
+      <div className="flex flex-col gap-1.5">
+        <span className="text-label text-faint">Fournisseur</span>
+        <Segmented
+          label="Fournisseur du coach"
+          value={provider}
+          options={Object.values(PROVIDERS).map((p) => ({ key: p.key, label: p.label }))}
+          onChange={pickProvider}
+          className="self-start"
+        />
+        <p className="text-label leading-relaxed text-faint">{adapter.note}</p>
+      </div>
+
+      <label className="flex flex-col gap-1.5">
+        <span className="text-label text-faint">Modèle</span>
+        <select
+          value={model || adapter.models[0]}
+          onChange={(e) => setModel(e.target.value)}
+          className={inputClass}
+        >
+          {adapter.models.map((name) => (
+            <option key={name} value={name}>
+              {name}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <label className="flex flex-col gap-1.5">
+        <span className="text-label text-faint">
+          Clé API {config?.key_set ? '· une clé est enregistrée' : '· aucune clé enregistrée'}
+        </span>
+        <input
+          type="password"
+          value={key}
+          onChange={(e) => setKey(e.target.value)}
+          placeholder={config?.key_set ? 'Laisser vide pour conserver la clé' : 'Collez votre clé'}
+          autoComplete="off"
+          spellCheck="false"
+          className={inputClass}
+        />
+        <a
+          href={adapter.keyUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="text-label text-accent underline underline-offset-2"
+        >
+          Obtenir une clé gratuite sur {new URL(adapter.keyUrl).host}
+        </a>
+      </label>
+
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant="primary"
+          disabled={busy}
+          onClick={() => {
+            // An untouched field means "leave the stored key alone", which is
+            // why it is `undefined` rather than the empty string here.
+            onSave({ provider, model: model || adapter.models[0], ...(key ? { apiKey: key } : {}) })
+            setKey('')
+          }}
+        >
+          Enregistrer
+        </Button>
+        {config?.key_set && (
+          <Button variant="danger" disabled={busy} onClick={() => onSave({ apiKey: '' })}>
+            Oublier la clé
+          </Button>
+        )}
+      </div>
+
+      {/* Two things the user has to be told before turning this on, and the
+          screen is the only place they will read them. */}
+      <div className="flex flex-col gap-2 rounded-lg border border-inaccuracy/40 bg-inaccuracy/10 px-3 py-2">
+        <p className="text-label leading-relaxed text-muted">
+          <span className="font-medium text-inaccuracy">Vos parties quittent le téléphone.</span>{' '}
+          Activer le coach envoie à {adapter.label} ce que le moteur a trouvé sur vos coups. Sur un
+          palier gratuit, ce contenu sert en général à entraîner les modèles du fournisseur ; les
+          paliers payants ne le font pas. Rien n’est envoyé tant que vous n’appuyez pas sur le
+          bouton, sur l’écran d’une partie.
+        </p>
+        <p className="text-label leading-relaxed text-muted">
+          <span className="font-medium text-inaccuracy">La clé est stockée en clair</span> dans la
+          base locale, protégée par le bac à sable Android et le chiffrement du téléphone — pas par
+          un secret séparé.
+        </p>
+      </div>
+
+      <p className="text-label leading-relaxed text-faint">
+        Le commentaire est conservé après sa génération : il n’est demandé qu’une fois. Une
+        ré-analyse Stockfish l’efface, parce que les jugements qu’il décrit ont changé.
+      </p>
+    </Panel>
+  )
+}
 
 export default function Settings() {
   const { settings, username, update } = useSettings()
@@ -31,6 +160,22 @@ export default function Settings() {
     try {
       await update({ chess_com_username: name })
       setMessage('Compte Chess.com enregistré. Lancez un import pour récupérer vos parties.')
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveCoach(patch) {
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    try {
+      await update({ coach: patch })
+      setMessage(
+        patch.apiKey === '' ? 'Clé oubliée.' : 'Réglages du coach enregistrés.',
+      )
     } catch (err) {
       setError(err.message)
     } finally {
@@ -106,42 +251,43 @@ export default function Settings() {
   const queued = (status?.pending ?? 0) + (status?.running ?? 0)
 
   return (
-    <div className="flex max-w-2xl flex-col gap-6">
+    <div className="flex max-w-2xl flex-col gap-4">
       <h1 className="text-xl font-semibold">Réglages</h1>
 
-      <section className="rounded-lg border border-ink-800 bg-ink-900 p-4">
-        <h2 className="text-sm font-medium text-ink-300">Compte Chess.com</h2>
-        <form onSubmit={save} className="mt-3 flex gap-2">
+      <Panel title="Compte Chess.com" bodyClass="p-4">
+        <form onSubmit={save} className="flex gap-2">
           <input
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="pseudo Chess.com"
-            className="flex-1 rounded-md border border-ink-700 bg-ink-950 px-3 py-2 text-sm focus:border-accent focus:outline-none"
+            aria-label="pseudo Chess.com"
+            className={inputClass}
           />
-          <button
-            type="submit"
-            disabled={busy}
-            className="rounded-md bg-accent px-3 py-2 text-sm font-medium text-ink-950 disabled:opacity-50"
-          >
+          {/* `type` reaches the underlying element through the rest props, so
+              this really does submit the form - no onClick, or the handler
+              would run twice. */}
+          <Button type="submit" variant="primary" disabled={busy}>
             Enregistrer
-          </button>
+          </Button>
         </form>
-        <p className="mt-2 text-xs text-ink-500">
-          L’API publique de Chess.com ne demande aucun mot de passe : seul le pseudo est
-          nécessaire pour lire vos parties.
+        <p className="mt-2 text-label leading-relaxed text-faint">
+          L’API publique de Chess.com ne demande aucun mot de passe : seul le pseudo est nécessaire
+          pour lire vos parties.
           {settings?.last_synced_at && (
             <> Dernier import : {new Date(settings.last_synced_at).toLocaleString('fr-FR')}.</>
           )}
         </p>
-      </section>
+      </Panel>
 
-      <section className="rounded-lg border border-ink-800 bg-ink-900 p-4">
-        <h2 className="text-sm font-medium text-ink-300">Importer l’historique</h2>
-        <div className="mt-3 flex items-center gap-2">
+      <CoachSettings config={settings?.coach} onSave={saveCoach} busy={busy} />
+
+      <Panel title="Importer l’historique" bodyClass="p-4">
+        <div className="flex items-center gap-2">
           <select
             value={months}
             onChange={(e) => setMonths(Number(e.target.value))}
-            className="rounded-md border border-ink-700 bg-ink-950 px-3 py-2 text-sm"
+            aria-label="Profondeur de l’import"
+            className="min-h-11 rounded-lg border border-line-strong bg-canvas px-3 text-body text-text"
           >
             {[1, 3, 6, 12, 24].map((m) => (
               <option key={m} value={m}>
@@ -149,85 +295,65 @@ export default function Settings() {
               </option>
             ))}
           </select>
-          <button
-            type="button"
-            onClick={importHistory}
-            disabled={busy || !username}
-            className="rounded-md border border-ink-700 px-3 py-2 text-sm text-ink-300 hover:bg-ink-800 disabled:opacity-50"
-          >
+          <Button onClick={importHistory} disabled={busy || !username} icon="refresh">
             {busy ? 'Import…' : 'Importer'}
-          </button>
+          </Button>
         </div>
-        <p className="mt-2 text-xs text-ink-500">
+        <p className="mt-2 text-label text-faint">
           L’import ne récupère que les parties ; l’analyse se lance séparément.
         </p>
-      </section>
+      </Panel>
 
-      <section className="rounded-lg border border-ink-800 bg-ink-900 p-4">
-        <h2 className="text-sm font-medium text-ink-300">File d’analyse</h2>
-        <p className="mt-2 text-sm text-ink-300">
+      <Panel title="File d’analyse" bodyClass="p-4">
+        <p className="text-body text-muted">
           {status
             ? `${status.done} analysées · ${queued} en attente${
                 status.stale ? ` · ${status.stale} à réanalyser plus profondément` : ''
               }${status.error ? ` · ${status.error} en échec` : ''}`
             : '—'}
         </p>
-        <button
-          type="button"
+        <Button
+          variant="primary"
           onClick={running ? stop : start}
           disabled={!running && queued === 0 && !status?.stale}
-          className="mt-3 rounded-md bg-accent px-3 py-2 text-sm font-medium text-ink-950 disabled:opacity-50"
+          className="mt-3"
         >
           {running ? 'Arrêter l’analyse' : 'Lancer l’analyse'}
-        </button>
+        </Button>
         {/* Worth saying once, plainly: this is why the app has no background
             sync and why the phone gets warm. */}
-        <p className="mt-2 text-xs text-ink-500">
+        <p className="mt-2 text-label leading-relaxed text-faint">
           L’analyse tourne uniquement quand l’application est ouverte. Android n’autorise pas un
-          calcul aussi long en arrière-plan, et un téléphone qui analyse des parties dans une
-          poche se viderait en quelques heures.
+          calcul aussi long en arrière-plan, et un téléphone qui analyse des parties dans une poche
+          se viderait en quelques heures.
         </p>
-      </section>
+      </Panel>
 
-      <section className="rounded-lg border border-ink-800 bg-ink-900 p-4">
-        <h2 className="text-sm font-medium text-ink-300">Moteur d’analyse</h2>
+      <Panel title="Moteur d’analyse" bodyClass="p-4">
         {health ? (
-          <p className="mt-2 text-sm">
+          <p className="text-body">
             {health.engine.available ? (
               <span className="text-good">
                 {health.engine.name} · profondeur {health.engine_depth}
-                {health.cpu_abi && <span className="text-ink-500"> · {health.cpu_abi}</span>}
+                {health.cpu_abi && <span className="text-faint"> · {health.cpu_abi}</span>}
               </span>
             ) : (
-              <span className="text-blunder">
-                Stockfish indisponible : {health.engine.error}
-              </span>
+              <span className="text-blunder">Stockfish indisponible : {health.engine.error}</span>
             )}
           </p>
         ) : (
-          <p className="mt-2 text-sm text-ink-500">État du moteur inconnu.</p>
+          <p className="text-body text-faint">État du moteur inconnu.</p>
         )}
-      </section>
+      </Panel>
 
-      <section className="rounded-lg border border-ink-800 bg-ink-900 p-4">
-        <h2 className="text-sm font-medium text-ink-300">Sauvegarde</h2>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={exportBackup}
-            disabled={busy}
-            className="rounded-md border border-ink-700 px-3 py-2 text-sm text-ink-300 hover:bg-ink-800 disabled:opacity-50"
-          >
+      <Panel title="Sauvegarde" bodyClass="p-4">
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={exportBackup} disabled={busy}>
             Exporter
-          </button>
-          <button
-            type="button"
-            onClick={() => fileInput.current?.click()}
-            disabled={busy}
-            className="rounded-md border border-ink-700 px-3 py-2 text-sm text-ink-300 hover:bg-ink-800 disabled:opacity-50"
-          >
+          </Button>
+          <Button onClick={() => fileInput.current?.click()} disabled={busy}>
             Restaurer
-          </button>
+          </Button>
           <input
             ref={fileInput}
             type="file"
@@ -237,21 +363,27 @@ export default function Settings() {
           />
         </div>
         {/* The reason this screen has a backup button at all, said once. */}
-        <p className="mt-2 text-xs text-ink-500">
+        <p className="mt-2 text-label leading-relaxed text-faint">
           Tout est stocké sur ce téléphone : une désinstallation ou un appareil perdu emporte les
           analyses, que Chess.com ne peut pas rendre. L’export produit un fichier JSON à envoyer
           ailleurs. La restauration ajoute ce qui manque et n’écrase jamais une partie déjà
           présente.
         </p>
-      </section>
+      </Panel>
 
       {message && (
-        <p className="rounded-md border border-good/40 bg-good/10 px-3 py-2 text-sm text-good">
+        <p
+          role="status"
+          className="rounded-lg border border-good/40 bg-good/10 px-3 py-2 text-body text-good"
+        >
           {message}
         </p>
       )}
       {error && (
-        <p className="rounded-md border border-blunder/40 bg-blunder/10 px-3 py-2 text-sm text-blunder">
+        <p
+          role="alert"
+          className="rounded-lg border border-blunder/40 bg-blunder/10 px-3 py-2 text-body text-blunder"
+        >
           {error}
         </p>
       )}

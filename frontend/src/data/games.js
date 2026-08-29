@@ -325,6 +325,11 @@ export function createGameStore(repo) {
         acpl_black: result.acpl_black,
         judgment_counts: result.judgment_counts,
         phase_stats: result.phase_stats,
+        // Cleared, not carried over. The commentary was written about a
+        // particular set of judgments; at a deeper search a move called a
+        // blunder can come back merely inaccurate, and a coach still calling
+        // it a blunder is worse than a coach saying nothing.
+        coach: {},
       };
 
       const columns = Object.keys(payload);
@@ -346,6 +351,29 @@ export function createGameStore(repo) {
         "UPDATE games SET analysis_status = 'done', analysis_error = NULL WHERE id = ?",
         [gameId],
       );
+    },
+
+    /**
+     * Store the coach's commentary for one game.
+     *
+     * Merged rather than replaced, so a run that only covered part of a game -
+     * a quota that ran out halfway, one chunk the model refused - adds what it
+     * managed without dropping what a previous run produced.
+     *
+     * Keyed by ply, as a JSON object. `saveAnalysis` overwrites the row and so
+     * clears this, which is the behaviour we want: a re-analysis renews the
+     * moves the commentary was written about.
+     */
+    async saveCoach(gameId, notes) {
+      const row = await repo.one("SELECT coach FROM analyses WHERE game_id = ?", [gameId]);
+      if (!row) throw new Error(`Aucune analyse pour la partie ${gameId}`);
+      const merged = { ...(row.coach ?? {}), ...notes };
+      await repo.run("UPDATE analyses SET coach = ?, updated_at = ? WHERE game_id = ?", [
+        JSON.stringify(merged),
+        now(),
+        gameId,
+      ]);
+      return merged;
     },
 
     /** Put a game back in the queue for a fresh analysis. */

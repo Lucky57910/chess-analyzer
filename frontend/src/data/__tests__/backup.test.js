@@ -305,3 +305,60 @@ describe("restoring across a schema change", () => {
     expect((await importBackup(target.repo, anonymous)).games).toBe(ROWS.length);
   });
 });
+
+/**
+ * The coach's commentary is the second thing in the file the phone cannot
+ * recompute. Stockfish's numbers cost an evening of CPU; these cost a daily
+ * API quota and a network the device may not have. Losing them in a restore
+ * would mean paying for them twice.
+ */
+describe("the coach's commentary in a backup", () => {
+  const NOTES = {
+    1: "Tu ouvres au centre, c’est le plan le plus simple.",
+    2: "La dame sort trop tôt et sera chassée avec gain de temps.",
+  };
+
+  async function withCommentary() {
+    const ctx = await populated();
+    await ctx.store.saveCoach(ctx.first.id, NOTES);
+    return ctx;
+  }
+
+  it("travels with the analysis it describes", async () => {
+    const source = await withCommentary();
+    const payload = await exportBackup(source.repo);
+    expect(payload.games.find((g) => g.analysis).analysis.coach).toEqual(NOTES);
+  });
+
+  it("comes back keyed by ply after a round trip", async () => {
+    const source = await withCommentary();
+    const payload = JSON.parse(JSON.stringify(await exportBackup(source.repo)));
+
+    const target = await freshStore();
+    await importBackup(target.repo, payload);
+
+    const [game] = (await target.store.list({ limit: 100 })).games.filter(
+      (g) => g.chess_com_game_id === source.first.chess_com_game_id,
+    );
+    expect((await target.store.getAnalysis(game.id)).coach).toEqual(NOTES);
+  });
+
+  // Every backup taken before the coach existed is missing the column. A
+  // restore has to produce an empty object there, not a null the screens would
+  // index into.
+  it("restores a file written before the coach existed", async () => {
+    const source = await populated();
+    const payload = JSON.parse(JSON.stringify(await exportBackup(source.repo)));
+    for (const entry of payload.games) {
+      if (entry.analysis) delete entry.analysis.coach;
+    }
+
+    const target = await freshStore();
+    await importBackup(target.repo, payload);
+
+    const [game] = (await target.store.list({ limit: 100 })).games.filter(
+      (g) => g.chess_com_game_id === source.first.chess_com_game_id,
+    );
+    expect((await target.store.getAnalysis(game.id)).coach).toEqual({});
+  });
+});

@@ -16,6 +16,7 @@
 
 import { DEFAULT_SETTINGS } from "../engine/analyze.js";
 import { SETTING_LAST_SYNCED, SETTING_USERNAME } from "../data/sync.js";
+import { publicCoachConfig, readCoachConfig, writeCoachConfig } from "../coach/config.js";
 
 export class ApiError extends Error {
   constructor(status, message) {
@@ -44,7 +45,7 @@ function flatten(row) {
   };
 }
 
-export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTINGS }) {
+export function createApi({ repo, store, sync, engine, coach, settings = DEFAULT_SETTINGS }) {
   /**
    * The whole archive, loaded once and kept until the database moves.
    *
@@ -97,6 +98,8 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
         chess_com_username: await repo.getSetting(SETTING_USERNAME, ""),
         last_synced_at: await repo.getSetting(SETTING_LAST_SYNCED, null),
         engine_depth: settings.engine_depth,
+        // No API key here by design - see coach/config.js.
+        coach: await publicCoachConfig(repo),
       };
     },
 
@@ -104,6 +107,7 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
       if ("chess_com_username" in patch) {
         await repo.setSetting(SETTING_USERNAME, patch.chess_com_username.trim());
       }
+      if (patch.coach) await writeCoachConfig(repo, patch.coach);
       return this.settings();
     },
 
@@ -154,6 +158,37 @@ export function createApi({ repo, store, sync, engine, settings = DEFAULT_SETTIN
         throw new ApiError(404, `Pas encore d'analyse (état : ${game?.analysis_status ?? "?"})`);
       }
       return row;
+    },
+
+    /**
+     * Have the coach comment one game.
+     *
+     * Requires an analysis: the model is only ever shown what Stockfish
+     * already found, so with nothing found there is nothing to say and the
+     * request would be an invitation to invent.
+     *
+     * The commentary is stored, so it costs its API quota once. Re-analysing
+     * the game clears it, because the moves it describes have been re-judged.
+     */
+    async coachGame(id, { onProgress, onWait } = {}) {
+      if (!coach) throw new ApiError(503, "Le coach n'est pas disponible sur cet appareil.");
+      const game = await store.get(id);
+      if (!game) throw new ApiError(404, "Partie introuvable");
+      const analysis = await store.getAnalysis(id);
+      if (!analysis) {
+        throw new ApiError(409, "Lancez d'abord l'analyse Stockfish de cette partie.");
+      }
+
+      const config = await readCoachConfig(repo);
+      const { notes, failed } = await coach.commentGame({
+        game,
+        analysis,
+        config,
+        onProgress,
+        onWait,
+      });
+      const stored = await store.saveCoach(id, notes);
+      return { notes: stored, added: Object.keys(notes).length, failed };
     },
 
     /** Put a game back at the front of the queue. */

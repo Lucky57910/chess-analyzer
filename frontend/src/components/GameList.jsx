@@ -1,17 +1,20 @@
 import { Link } from 'react-router-dom'
+import Badge from './ui/Badge'
 
-const RESULT_STYLE = {
-  win: 'bg-good/20 text-good',
-  loss: 'bg-blunder/20 text-blunder',
-  draw: 'bg-ink-700 text-ink-300',
-}
-
+const RESULT_TONE = { win: 'good', loss: 'bad', draw: 'neutral' }
 const RESULT_LABEL = { win: 'Victoire', loss: 'Défaite', draw: 'Nulle' }
 
 const STATUS_LABEL = {
   pending: 'En attente',
   running: 'Analyse…',
   error: 'Échec',
+}
+
+const TIME_CLASS_LABEL = {
+  bullet: 'Bullet',
+  blitz: 'Blitz',
+  rapid: 'Rapide',
+  daily: 'Par jour',
 }
 
 function formatDate(iso) {
@@ -23,58 +26,74 @@ function formatDate(iso) {
   })
 }
 
+/**
+ * One game.
+ *
+ * Both text lines used to be `truncate`, on a grid whose middle column was the
+ * only flexible one. On a 375px screen that meant the opening name — the thing
+ * you scan this list for — was reliably rendered as "Sicilian Defense: Naj…",
+ * and a long opponent name ate its own rating. They wrap now: a row is
+ * occasionally three lines tall, which costs a little scrolling and returns
+ * every word.
+ *
+ * Chess.com's own accuracy was drawn as "/ 58.1" behind a `title` explaining
+ * what the slash meant — a tooltip on a device with no pointer. It is labelled
+ * on its own line instead.
+ */
 function GameRow({ game }) {
+  const analysed = game.analysis_status === 'done'
   return (
     <Link
       to={`/games/${game.id}`}
-      className="grid grid-cols-[auto_1fr_auto] items-center gap-x-4 gap-y-1 rounded-lg border border-ink-800 bg-ink-900 px-4 py-3 transition-colors hover:border-ink-700 hover:bg-ink-800 sm:grid-cols-[5.5rem_1fr_auto_auto]"
+      className="grid grid-cols-[auto_1fr_auto] items-start gap-x-3 gap-y-1 rounded-xl border border-line bg-surface px-3 py-3 transition-colors hover:border-line-strong hover:bg-raised sm:px-4"
     >
-      <span
-        className={`rounded px-2 py-1 text-center text-xs font-medium ${RESULT_STYLE[game.result]}`}
-      >
+      <Badge tone={RESULT_TONE[game.result]} className="mt-0.5">
         {RESULT_LABEL[game.result]}
-      </span>
+      </Badge>
 
       <div className="min-w-0">
-        <div className="truncate text-sm text-ink-100">
-          <span className="text-ink-500">
-            {game.user_color === 'white' ? '□' : '■'} vs{' '}
+        <div className="text-body leading-snug text-text">
+          <span className="text-faint" aria-hidden="true">
+            {game.user_color === 'white' ? '□' : '■'}{' '}
           </span>
+          <span className="sr-only">
+            {game.user_color === 'white' ? 'avec les blancs' : 'avec les noirs'},{' '}
+          </span>
+          <span className="text-faint">contre </span>
           {game.opponent_username}
-          {game.opponent_rating ? (
-            <span className="text-ink-500"> ({game.opponent_rating})</span>
-          ) : null}
+          {game.opponent_rating ? <span className="text-faint"> ({game.opponent_rating})</span> : null}
         </div>
-        <div className="truncate text-xs text-ink-500">
-          {game.game_kind === 'training' && (
-            <span className="mr-1 rounded bg-ink-700 px-1 py-0.5 text-[10px] text-ink-300">
-              Entraînement
-            </span>
+        <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 text-label leading-snug text-faint">
+          {game.game_kind === 'training' && <Badge>Entraînement</Badge>}
+          <span>{formatDate(game.played_at)}</span>
+          <span aria-hidden="true">·</span>
+          <span>{TIME_CLASS_LABEL[game.time_class] ?? game.time_class ?? 'cadence inconnue'}</span>
+          {game.opening && (
+            <>
+              <span aria-hidden="true">·</span>
+              <span>{game.opening}</span>
+            </>
           )}
-          {formatDate(game.played_at)} · {game.time_class || '?'}
-          {game.opening ? ` · ${game.opening}` : ''}
         </div>
       </div>
 
-      <div className="text-right text-xs text-ink-300">
-        {game.analysis_status === 'done' ? (
+      <div className="text-right text-label text-faint">
+        {analysed ? (
           <>
-            <div className="font-mono text-sm text-ink-100">
+            <div className="font-mono text-lead text-text tabular-nums">
               {game.accuracy?.toFixed(1)}%
-              {game.chess_com_accuracy != null && (
-                <span className="text-ink-500" title="Précision Chess.com (CAPS2)">
-                  {' '}
-                  / {game.chess_com_accuracy.toFixed(1)}
-                </span>
-              )}
             </div>
-            <div className="text-ink-500">
-              {game.blunders ?? 0} gaffe{(game.blunders ?? 0) > 1 ? 's' : ''} ·{' '}
-              {game.mistakes ?? 0} err.
+            <div className="leading-snug">
+              {game.blunders ?? 0} gaffe{(game.blunders ?? 0) > 1 ? 's' : ''}
+              {' · '}
+              {game.mistakes ?? 0} erreur{(game.mistakes ?? 0) > 1 ? 's' : ''}
             </div>
+            {game.chess_com_accuracy != null && (
+              <div className="leading-snug">Chess.com {game.chess_com_accuracy.toFixed(1)}%</div>
+            )}
           </>
         ) : (
-          <span className="text-ink-500">{STATUS_LABEL[game.analysis_status]}</span>
+          <span>{STATUS_LABEL[game.analysis_status]}</span>
         )}
       </div>
     </Link>
@@ -83,7 +102,11 @@ function GameRow({ game }) {
 
 export default function GameList({ games, emptyLabel = 'Aucune partie.' }) {
   if (!games.length) {
-    return <p className="rounded-lg border border-dashed border-ink-700 p-6 text-center text-sm text-ink-500">{emptyLabel}</p>
+    return (
+      <p className="rounded-xl border border-dashed border-line-strong p-6 text-center text-body text-faint">
+        {emptyLabel}
+      </p>
+    )
   }
   return (
     <div className="flex flex-col gap-2">

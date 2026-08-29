@@ -15,9 +15,24 @@
  * side of a boundary, a null nobody guarded.
  */
 
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Testing Library gives a `findBy` one second by default. Every test in this
+// file renders a whole page through lazy routes, two providers and a fake
+// database, and the analysis page runs real chess.js geometry - mate
+// detection walks every legal move - on every ply it is stepped through. On a
+// loaded machine (CI, or a full local run with fifteen files in parallel) that
+// crosses a second while nothing at all is wrong, and the failures it produced
+// were timing rather than behaviour: the same tests passed in isolation.
+//
+// Fifteen seconds is not a real wait, and it sits under the 20 s vitest gives
+// the test itself - the two clocks have to stay in that order or the outer one
+// fires first and reports a timeout for the wrong reason. Nothing here is
+// expected to take even one second; the number only has to be far enough above
+// the noise that a red run means something is broken.
+configure({ asyncUtilTimeout: 15_000 });
 
 vi.mock("../utils/api", () => {
   const api = {
@@ -25,11 +40,22 @@ vi.mock("../utils/api", () => {
       chess_com_username: "maxime",
       last_synced_at: "2026-08-26T10:00:00.000Z",
       engine_depth: 18,
+      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: false },
     })),
     updateSettings: vi.fn(async (patch) => ({
-      chess_com_username: patch.chess_com_username.trim(),
+      chess_com_username: patch.chess_com_username?.trim() ?? "maxime",
       last_synced_at: null,
       engine_depth: 18,
+      coach: {
+        provider: patch.coach?.provider ?? "gemini",
+        model: patch.coach?.model ?? "gemini-2.5-flash",
+        key_set: patch.coach?.apiKey ? true : false,
+      },
+    })),
+    coachGame: vi.fn(async () => ({
+      notes: { 3: "Ta dame sort trop tôt : elle sera chassée avec gain de temps." },
+      added: 1,
+      failed: 0,
     })),
     games: vi.fn(async () => [
       {
@@ -95,6 +121,7 @@ vi.mock("../utils/api", () => {
       total: 12,
     })),
     sync: vi.fn(async () => ({ imported: 0, updated: 0, skipped: 0, pending_analysis: 3 })),
+    refresh: vi.fn(async () => ({ status: "pending" })),
     // Answers like the UCI driver: White's point of view, plus the move it
     // would play. The reply is always the first legal move, which is enough
     // for the board to move and keeps the fixture from needing a real search.
@@ -257,6 +284,7 @@ vi.mock("../utils/api", () => {
       chess_com_accuracy: null,
     })),
     analysis: vi.fn(async () => ({
+      coach: {},
       accuracy_white: 88.1,
       accuracy_black: 71.4,
       acpl_white: 22,
@@ -427,6 +455,9 @@ describe("the dashboard", () => {
     fireEvent.click(await screen.findByRole("button", { name: /Charger 25 de plus/ }));
     expect(await screen.findByText("50 sur 342 parties")).toBeDefined();
 
+    // The dropdowns are folded away until asked for: five permanent selects
+    // above an unfiltered list is most of a phone screen.
+    fireEvent.click(screen.getByRole("button", { name: /^Filtres/ }));
     fireEvent.change(screen.getByLabelText("Résultat"), { target: { value: "loss" } });
 
     await waitFor(() =>
@@ -887,5 +918,150 @@ describe("the best-move peek", () => {
       expect(screen.queryByRole("button", { name: /Revenir au coup joué/ })).toBe(null),
     );
     expect(screen.getByRole("button", { name: /Voir le meilleur coup/ })).toBeDefined();
+  });
+});
+
+describe("the coach", () => {
+  // Without a key the screen must not offer to spend one, and it must say
+  // where the switch is instead of leaving a dead button.
+  it("points at the settings until a key is stored", async () => {
+    renderApp("/games/1");
+    expect(await screen.findByRole("link", { name: /Activer le coach IA/ })).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Faire commenter/ })).toBe(null);
+    expect(api.coachGame).not.toHaveBeenCalled();
+  });
+
+  it("offers to comment the game once a key is stored", async () => {
+    api.settings.mockResolvedValueOnce({
+      chess_com_username: "maxime",
+      last_synced_at: null,
+      engine_depth: 18,
+      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+    });
+    renderApp("/games/1");
+    expect(await screen.findByRole("button", { name: /Faire commenter par le coach/ })).toBeDefined();
+  });
+
+  it("puts the generated paragraph on the move it was written about", async () => {
+    api.settings.mockResolvedValueOnce({
+      chess_com_username: "maxime",
+      last_synced_at: null,
+      engine_depth: 18,
+      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+    });
+    renderApp("/games/1");
+    fireEvent.click(await screen.findByRole("button", { name: /Faire commenter par le coach/ }));
+    await waitFor(() => expect(api.coachGame).toHaveBeenCalled());
+
+    // The commentary is for ply 3; the board opens on ply 0 and nothing should
+    // claim otherwise until the user walks there.
+    expect(screen.queryByText(/Ta dame sort trop tôt/)).toBe(null);
+    for (let i = 0; i < 3; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(await screen.findByText(/Ta dame sort trop tôt/)).toBeDefined();
+  });
+
+  // The generated paragraph leads, but the engine's own findings stay under it:
+  // the model writes the advice, Stockfish keeps the last word on the facts.
+  it("does not replace what the engine found", async () => {
+    api.settings.mockResolvedValueOnce({
+      chess_com_username: "maxime",
+      last_synced_at: null,
+      engine_depth: 18,
+      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+    });
+    renderApp("/games/1");
+    fireEvent.click(await screen.findByRole("button", { name: /Faire commenter par le coach/ }));
+    await waitFor(() => expect(api.coachGame).toHaveBeenCalled());
+    for (let i = 0; i < 3; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
+
+    await screen.findByText(/Ta dame sort trop tôt/);
+    expect(screen.getByText(/L’adversaire enchaîne/)).toBeDefined();
+  });
+
+  // Re-analysing re-judges every move, so the stored commentary is dropped
+  // with it. Leaving it on screen means paragraphs describing a verdict that
+  // no longer exists - for as long as the queue takes, which is minutes.
+  it("drops the commentary when the game is sent back for a fresh analysis", async () => {
+    api.settings.mockResolvedValueOnce({
+      chess_com_username: "maxime",
+      last_synced_at: null,
+      engine_depth: 18,
+      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+    });
+    renderApp("/games/1");
+    fireEvent.click(await screen.findByRole("button", { name: /Faire commenter par le coach/ }));
+    await waitFor(() => expect(api.coachGame).toHaveBeenCalled());
+    for (let i = 0; i < 3; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
+    await screen.findByText(/Ta dame sort trop tôt/);
+
+    // The re-analysed game comes back pending, so nothing reloads the notes.
+    api.game.mockResolvedValue({
+      ...(await api.game()),
+      analysis_status: "pending",
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Ré-analyser la partie/ }));
+
+    await waitFor(() => expect(screen.queryByText(/Ta dame sort trop tôt/)).toBe(null));
+  });
+
+  it("counts the whole game, not just what the last run added", async () => {
+    api.settings.mockResolvedValueOnce({
+      chess_com_username: "maxime",
+      last_synced_at: null,
+      engine_depth: 18,
+      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+    });
+    // Two notes already stored, one added by this run: the status line has to
+    // say three, because three is what the reader can now see on the board.
+    api.coachGame.mockResolvedValueOnce({
+      notes: { 1: "a", 3: "b", 5: "c" },
+      added: 1,
+      failed: 0,
+    });
+    renderApp("/games/1");
+    fireEvent.click(await screen.findByRole("button", { name: /Faire commenter par le coach/ }));
+    expect(await screen.findByText(/3 coups commentés sur la partie/)).toBeDefined();
+  });
+
+  it("says what went wrong instead of failing silently", async () => {
+    api.settings.mockResolvedValueOnce({
+      chess_com_username: "maxime",
+      last_synced_at: null,
+      engine_depth: 18,
+      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+    });
+    api.coachGame.mockRejectedValueOnce(new Error("Quota du modèle atteint."));
+    renderApp("/games/1");
+    fireEvent.click(await screen.findByRole("button", { name: /Faire commenter par le coach/ }));
+    expect(await screen.findByText(/Quota du modèle atteint/)).toBeDefined();
+  });
+
+  // The key is write-only on purpose: it is never sent back to a screen, so it
+  // cannot end up in a screenshot or a rendered tree.
+  it("never renders the stored key back into the settings screen", async () => {
+    api.settings.mockResolvedValue({
+      chess_com_username: "maxime",
+      last_synced_at: null,
+      engine_depth: 18,
+      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+    });
+    renderApp("/settings");
+    expect(await screen.findByText(/une clé est enregistrée/)).toBeDefined();
+    const field = document.querySelector('input[type="password"]');
+    expect(field.value).toBe("");
+    expect(screen.getByRole("button", { name: /Oublier la clé/ })).toBeDefined();
+  });
+
+  it("sends the provider and model, and the key only when one was typed", async () => {
+    renderApp("/settings");
+    const field = await screen.findByPlaceholderText(/Collez votre clé/);
+    fireEvent.change(field, { target: { value: "AIza-test" } });
+    fireEvent.click(screen.getAllByRole("button", { name: "Enregistrer" })[1]);
+
+    await waitFor(() =>
+      expect(api.updateSettings).toHaveBeenCalledWith({
+        coach: { provider: "gemini", model: "gemini-2.5-flash", apiKey: "AIza-test" },
+      }),
+    );
   });
 });

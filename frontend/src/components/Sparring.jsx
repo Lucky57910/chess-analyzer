@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Board from './Board'
+import CoachBubble from './CoachBubble'
 import EvalBar from './EvalBar'
+import Button from './ui/Button'
 import {
   applyMove,
   legalDests,
@@ -140,67 +142,61 @@ export default function Sparring({ startFen, orientation, color, onExit }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={onHint}
-          disabled={!myTurn}
-          className="rounded-md border border-ink-700 px-3 py-1.5 text-sm text-ink-300 hover:bg-ink-800 disabled:opacity-40"
-        >
+        <Button size="sm" icon="hint" onClick={onHint} disabled={!myTurn}>
           Indice
-        </button>
-        <button
-          type="button"
-          onClick={onExit}
-          className="rounded-md border border-ink-700 px-3 py-1.5 text-sm text-ink-300 hover:bg-ink-800"
-        >
+        </Button>
+        <Button size="sm" icon="back" onClick={onExit}>
           Revenir à l’analyse
-        </button>
-        <span className="ml-auto font-mono text-sm text-ink-300">
+        </Button>
+        <span className="ml-auto font-mono text-body text-muted">
           {formatEval({ eval_cp: evaluation?.cp ?? null, eval_mate: evaluation?.mate ?? null })}
         </span>
       </div>
 
-      <p className="text-sm">
+      <p className="text-body">
         {error ? (
           <span className="text-blunder">{error}</span>
         ) : outcome.over ? (
-          <span className="text-ink-100">{OUTCOME_TEXT[outcome.reason]?.(outcome, color)}</span>
+          <span className="text-text">{OUTCOME_TEXT[outcome.reason]?.(outcome, color)}</span>
         ) : thinking ? (
-          <span className="text-ink-500">L’ordinateur réfléchit…</span>
+          <span className="text-faint">L’ordinateur réfléchit…</span>
         ) : myTurn ? (
-          <span className="text-ink-500">À vous de jouer.</span>
+          <span className="text-faint">À vous de jouer.</span>
         ) : (
-          <span className="text-ink-500">Position à l’adversaire.</span>
+          <span className="text-faint">Position à l’adversaire.</span>
         )}
       </p>
 
+      {/* The same coach, in the same bubble, so a verdict during a rally reads
+          as the voice that commented the game it came out of. */}
       {last?.verdict && (
-        <p className="text-sm">
-          <span className="font-mono text-ink-100">{last.san}</span>{' '}
-          {last.verdict.is_best ? (
-            <span className="text-good">le meilleur coup.</span>
-          ) : last.verdict.judgment ? (
-            <>
-              <span className={JUDGMENT_CLASS[last.verdict.judgment]}>
-                {JUDGMENT_LABEL[last.verdict.judgment]}
-              </span>{' '}
-              <span className="text-ink-500">
-                −{(last.verdict.cp_loss / 100).toFixed(2)}
-                {last.best ? ` · mieux : ${last.best}` : ''}
-              </span>
-            </>
-          ) : (
-            <span className="text-ink-500">correct.</span>
-          )}
-        </p>
+        <CoachBubble
+          san={last.san}
+          message={{
+            tone: last.verdict.is_best ? 'good' : (last.verdict.judgment ?? 'neutral'),
+            verdict: last.verdict.is_best
+              ? 'Meilleur coup'
+              : (JUDGMENT_LABEL[last.verdict.judgment] ?? null),
+            headline: last.verdict.is_best
+              ? 'C’est le coup que le moteur jouait ici.'
+              : last.verdict.judgment
+                ? `Ce coup coûte ${(last.verdict.cp_loss / 100).toFixed(2)} pion(s).${
+                    last.best ? ` Le moteur jouait ${last.best}.` : ''
+                  }`
+                : 'Coup correct : la position ne bouge pas de façon notable.',
+            details: [],
+            cost: last.verdict.judgment ? last.verdict.cp_loss : null,
+            better: last.verdict.is_best ? null : (last.best ?? null),
+          }}
+        />
       )}
 
       {line.length > 0 && (
-        <div className="rounded-lg border border-ink-800 bg-ink-900 p-3">
-          <h3 className="mb-1 text-xs uppercase tracking-wide text-ink-500">Votre partie</h3>
-          <p className="font-mono text-sm text-ink-300">
+        <div className="rounded-lg border border-line bg-surface p-3">
+          <h3 className="mb-1 text-label uppercase tracking-wide text-faint">Votre partie</h3>
+          <p className="font-mono text-body text-muted">
             {line.map((entry, i) => (
-              <span key={i} className={entry.reply ? 'text-ink-500' : JUDGMENT_CLASS[entry.verdict?.judgment] || 'text-ink-100'}>
+              <span key={i} className={entry.reply ? 'text-faint' : JUDGMENT_CLASS[entry.verdict?.judgment] || 'text-text'}>
                 {entry.san}{' '}
               </span>
             ))}

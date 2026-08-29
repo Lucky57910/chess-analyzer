@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
 import GameList from '../components/GameList'
+import Icon from '../components/Icon'
 import StatsSummary from '../components/StatsSummary'
+import Button from '../components/ui/Button'
+import { Card } from '../components/ui/Card'
 import { useQueue } from '../hooks/useQueue'
 import { useSettings } from '../hooks/useSettings'
 import { api } from '../utils/api'
@@ -65,44 +67,75 @@ const FILTER_FIELDS = [
 
 const NO_FILTERS = { result: '', time_class: '', color: '', kind: '', status: '', search: '' }
 
+/**
+ * Search always, the five dropdowns on request.
+ *
+ * Open, this block is a search field and five labelled selects: on a phone
+ * that is most of a screen, permanently, above a list nobody has filtered yet.
+ * Collapsed it is one field and a button carrying the number of filters that
+ * are on, so the archive starts where it can be seen. Nothing was removed —
+ * the selects are one tap away, and the count means a filter left on cannot be
+ * forgotten about.
+ */
 function FilterBar({ filters, onChange, searchInput, onSearch, onReset, active }) {
+  const [open, setOpen] = useState(false)
+  const count = FILTER_FIELDS.filter(({ key }) => filters[key]).length
+
   return (
-    <div className="flex flex-col gap-3 rounded-lg border border-ink-800 bg-ink-900 p-3">
-      <input
-        type="search"
-        value={searchInput}
-        onChange={(e) => onSearch(e.target.value)}
-        placeholder="Chercher un adversaire ou une ouverture"
-        className="w-full rounded-md border border-ink-700 bg-ink-950 px-3 py-2 text-sm text-ink-100 placeholder:text-ink-500"
-      />
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
-        {FILTER_FIELDS.map(({ key, label, options }) => (
-          <label key={key} className="flex flex-col gap-1 text-xs text-ink-500">
-            {label}
-            <select
-              value={filters[key]}
-              onChange={(e) => onChange(key, e.target.value)}
-              className="rounded-md border border-ink-700 bg-ink-950 px-2 py-1.5 text-sm text-ink-100"
-            >
-              {options.map(([value, text]) => (
-                <option key={value} value={value}>
-                  {text}
-                </option>
-              ))}
-            </select>
-          </label>
-        ))}
-      </div>
-      {active && (
-        <button
-          type="button"
-          onClick={onReset}
-          className="self-start text-xs text-ink-300 underline underline-offset-2 hover:text-ink-100"
+    <Card className="flex flex-col gap-3 p-3">
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Icon
+            name="search"
+            size={16}
+            className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-faint"
+          />
+          <input
+            type="search"
+            value={searchInput}
+            onChange={(e) => onSearch(e.target.value)}
+            placeholder="Chercher un adversaire ou une ouverture"
+            aria-label="Chercher un adversaire ou une ouverture"
+            className="min-h-11 w-full rounded-lg border border-line-strong bg-canvas pr-3 pl-9 text-body text-text placeholder:text-faint"
+          />
+        </div>
+        <Button
+          size="sm"
+          variant={count ? 'primary' : 'secondary'}
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
         >
-          Réinitialiser les filtres
-        </button>
+          Filtres{count ? ` (${count})` : ''}
+        </Button>
+      </div>
+
+      {open && (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+          {FILTER_FIELDS.map(({ key, label, options }) => (
+            <label key={key} className="flex flex-col gap-1 text-label text-faint">
+              {label}
+              <select
+                value={filters[key]}
+                onChange={(e) => onChange(key, e.target.value)}
+                className="min-h-11 rounded-lg border border-line-strong bg-canvas px-2 text-body text-text"
+              >
+                {options.map(([value, text]) => (
+                  <option key={value} value={value}>
+                    {text}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ))}
+        </div>
       )}
-    </div>
+
+      {active && (
+        <Button size="sm" variant="ghost" icon="close" onClick={onReset} className="self-start">
+          Réinitialiser les filtres
+        </Button>
+      )}
+    </Card>
   )
 }
 
@@ -211,18 +244,15 @@ export default function Dashboard() {
 
   if (!username) {
     return (
-      <div className="rounded-lg border border-ink-800 bg-ink-900 p-6">
-        <h2 className="text-lg font-medium">Reliez votre compte Chess.com</h2>
-        <p className="mt-1 text-sm text-ink-300">
+      <Card className="p-6">
+        <h2 className="text-lead font-medium">Reliez votre compte Chess.com</h2>
+        <p className="mt-1 text-body text-muted">
           Renseignez votre pseudo Chess.com dans les réglages pour importer vos parties.
         </p>
-        <Link
-          to="/settings"
-          className="mt-4 inline-block rounded-md bg-accent px-3 py-2 text-sm font-medium text-ink-950"
-        >
+        <Button to="/settings" variant="primary" className="mt-4">
           Aller aux réglages
-        </Link>
-      </div>
+        </Button>
+      </Card>
     )
   }
 
@@ -230,60 +260,49 @@ export default function Dashboard() {
   const hasMore = games.length < total
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Parties</h1>
-        <div className="flex items-center gap-3 text-sm text-ink-500">
+        <div>
+          <h1 className="text-xl font-semibold">Parties</h1>
           {status && (
-            <span>
+            <p className="text-label text-faint">
               {status.done} analysées
               {queued > 0 && ` · ${queued} en file`}
               {status.error > 0 && ` · ${status.error} en échec`}
-            </span>
+            </p>
           )}
-          <button
-            type="button"
-            onClick={onSync}
-            disabled={syncing || running}
-            className="rounded-md border border-ink-700 px-3 py-1.5 text-ink-300 hover:bg-ink-800 disabled:opacity-50"
-          >
-            {syncing ? 'Import…' : 'Synchroniser'}
-          </button>
         </div>
+        <Button size="sm" icon="refresh" onClick={onSync} disabled={syncing || running}>
+          {syncing ? 'Import…' : 'Synchroniser'}
+        </Button>
       </div>
 
       {/* The queue is the user's decision now: it costs battery and it only
           runs while they are looking at it, so it does not start itself. */}
       {(queued > 0 || running) && (
-        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-ink-800 bg-ink-900 px-4 py-3">
-          <div className="flex-1 text-sm">
+        <Card className="flex flex-wrap items-center gap-3 px-4 py-3">
+          <div className="flex-1 text-body">
             {running ? (
               <>
-                <span className="text-ink-100">Analyse en cours</span>
-                <span className="text-ink-500">
+                <span className="text-text">Analyse en cours</span>
+                <span className="text-faint">
                   {' · '}
                   {processed} partie(s) terminée(s)
                   {progress && ` · position ${progress.done}/${progress.total}`}
                 </span>
               </>
             ) : (
-              <span className="text-ink-300">
-                {queued} partie(s) en attente d’analyse.
-              </span>
+              <span className="text-muted">{queued} partie(s) en attente d’analyse.</span>
             )}
           </div>
-          <button
-            type="button"
-            onClick={running ? stop : start}
-            className="rounded-md bg-accent px-3 py-1.5 text-sm font-medium text-ink-950"
-          >
+          <Button size="sm" variant="primary" onClick={running ? stop : start}>
             {running ? 'Arrêter' : 'Analyser'}
-          </button>
-        </div>
+          </Button>
+        </Card>
       )}
 
       {error && (
-        <p className="rounded-md border border-blunder/40 bg-blunder/10 px-3 py-2 text-sm text-blunder">
+        <p className="rounded-lg border border-blunder/40 bg-blunder/10 px-3 py-2 text-body text-blunder">
           {error}
         </p>
       )}
@@ -300,13 +319,13 @@ export default function Dashboard() {
       />
 
       <div className="flex flex-col gap-3">
-        <div className="flex items-baseline justify-between text-xs text-ink-500">
+        <div className="flex items-baseline justify-between text-label text-faint">
           <span>
             {total > 0
               ? `${games.length} sur ${total} partie${total > 1 ? 's' : ''}`
               : 'Aucune partie'}
           </span>
-          {loading && <span>Chargement…</span>}
+          {loading && <span role="status">Chargement…</span>}
         </div>
 
         <GameList
@@ -321,14 +340,14 @@ export default function Dashboard() {
         />
 
         {hasMore && (
-          <button
-            type="button"
+          <Button
             onClick={() => setPages((p) => p + 1)}
             disabled={loading}
-            className="self-center rounded-md border border-ink-700 px-4 py-2 text-sm text-ink-300 hover:bg-ink-800 disabled:opacity-50"
+            icon="chevronDown"
+            className="self-center"
           >
             Charger {Math.min(PAGE_SIZE, total - games.length)} de plus
-          </button>
+          </Button>
         )}
       </div>
     </div>

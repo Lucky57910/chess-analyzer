@@ -8,7 +8,7 @@ there is no server and no other package.
 Run these from `frontend/`.
 
 ```bash
-npm test           # vitest, 158 tests, no device needed
+npm test           # vitest, 467 tests, no device needed
 npm run lint       # oxlint
 npm run build      # vite
 npm run dev        # browser, for layout work only
@@ -31,6 +31,13 @@ together, so verifying a native change means pushing and reading the run.
 | `src/data/db.js` | Driver contract + Node's SQLite, which is what the tests run on. |
 | `src/data/games.js` `sync.js` `stats.js` `backup.js` | Storage, queue, aggregates, backup. |
 | `src/data/capacitor.js` `share.js` | Device-only wiring. Deliberately logic-free. |
+| `src/coach/narrate.js` | Ranks and words what to say about one move. All the French for a motif lives here. |
+| `src/coach/digest.js` | The facts a language model is allowed to see. Never the PGN. |
+| `src/coach/position.js` | Material, king safety, pawn structure, development, repeated opening moves. |
+| `src/coach/providers.js` `client.js` `config.js` | Provider adapters, the request/validation loop, and where the key lives. |
+| `src/coach/throttle.js` | Sliding-window rate limiter and `Retry-After` backoff for the free tier. |
+| `src/components/ui/` | Button, Card/Panel, Segmented, Badge, and the ⓘ that replaced every `title`. |
+| `src/components/Icon.jsx` | The icon set, inline. Replaced the emoji that Android drew differently on every device. |
 | `src/utils/api.js` | Facade the pages call. Keeps the shape the old HTTP client had. |
 | `android/app/src/main/java/.../StockfishPlugin.java` | Spawns the engine. Deliberately dumb. |
 
@@ -57,6 +64,40 @@ Getting the sign wrong produces plausible-looking numbers on every screen.
 not `Math.round`. `scoring.js` has a `roundTo` that reproduces it; the fixture
 will catch you if you replace it.
 
+**The coach's commentary is optional and never invents.** `coach/` calls a
+language model over the *engine's findings only* — `digest.js` builds that
+payload and the PGN is deliberately not in it, because a model given a game
+will re-analyse it badly and state the result confidently. Answers are
+validated before they are believed (unknown ply, over-long text, unparseable
+JSON are all dropped), and with no key configured the app falls back to
+`narrate.js`, which is what it always did. The default provider is Google
+Gemini's free tier; the key is the user's own, pasted in Réglages and stored in
+the local `settings` table. **No key is ever committed or built into the APK.**
+Requests are batched (`CHUNK_SIZE` moves each, currently 24), so a game costs
+one or two requests rather than one per move — the free tier's requests-per-
+minute is not the binding constraint at the volume one person produces, and
+`throttle.js` exists for the burst that would cross it rather than to pace the
+normal case. Note that Google's **free tier trains on what it is sent**; the
+digest carries the user's games, and the settings screen says so.
+
+The way to make the coach better is to **widen the fact base, not to tune the
+prompt or buy a bigger model**. `position.js` and the `[%clk]` clock times are
+there for that reason: a model given "roi en e1, non roqué, coup 14" cannot
+invent king safety, while a model given nothing will write a paragraph about it
+anyway, because a coach's paragraph has a shape it knows. Structural facts are
+emitted as *deltas* — once, on the move that caused them — with an absolute
+snapshot at the head of each chunk; repeating a fact on twenty lines gets it
+written about twenty times.
+
+**`title` attributes are not a way to say anything.** The app ships as an APK,
+where nothing hovers, so every explanation that lived in a `title` was written
+and never displayed. Use `components/ui/Info.jsx` instead.
+
+**Semantic colour tokens, not the `ink-*` ramp.** `index.css` defines
+`surface` / `raised` / `line` / `text` / `muted` / `faint` on top of the ramp;
+screens use those. `text-body` / `text-label` / `text-lead` are the type scale,
+and 12px (`text-label`) is the floor.
+
 ## Testing expectations
 
 The judgment model and the data layer are held to a recorded oracle
@@ -67,7 +108,9 @@ repo passed a mutation before being tightened, and a green test that cannot fail
 is worse than none.
 
 The native surface (`capacitor.js`, `share.js`, the Java plugin) has no tests by
-construction. Keep logic out of it so that stays true.
+construction. Keep logic out of it so that stays true. The coach's HTTP client
+takes its transport as an argument for the same reason, so `coach.test.js` runs
+the whole request/validate/merge path with no key and no network.
 
 ## Conventions
 

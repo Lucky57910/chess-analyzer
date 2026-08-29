@@ -24,14 +24,14 @@ function Tooltip({ move, x }) {
   const flip = x > 0.6
   return (
     <div
-      className="pointer-events-none absolute top-1 z-10 w-max max-w-[14rem] rounded-md border border-ink-700 bg-ink-900 px-3 py-2 text-xs shadow-lg"
+      className="pointer-events-none absolute top-1 z-10 w-max max-w-[14rem] rounded-md border border-line-strong bg-surface px-3 py-2 text-label shadow-lg"
       style={{ left: `${x * 100}%`, transform: `translateX(${flip ? '-100%' : '0'})`, height: 0 }}
     >
-      <div className="font-medium text-ink-100">
+      <div className="font-medium text-text">
         {move.move_number}
         {move.color === 'white' ? '.' : '...'} {move.san}
       </div>
-      <div className="text-ink-300">Éval {formatEval(move)}</div>
+      <div className="text-muted">Éval {formatEval(move)}</div>
       {move.judgment && (
         <div style={{ color: JUDGMENT_COLOR[move.judgment] }}>
           {JUDGMENT_LABEL[move.judgment]} · −{(move.cp_loss / 100).toFixed(2)}
@@ -124,7 +124,7 @@ export default function EvalGraph({ moves, currentPly, onSelectPly, height = 180
                   x2={PAD.left + plot.w}
                   y1={y}
                   y2={y}
-                  stroke="var(--color-ink-700)"
+                  stroke="var(--color-line-strong)"
                   strokeDasharray={pawns === 0 ? undefined : '2 4'}
                 />
                 <text
@@ -132,7 +132,7 @@ export default function EvalGraph({ moves, currentPly, onSelectPly, height = 180
                   y={y + 4}
                   textAnchor="end"
                   fontSize="11"
-                  fill="var(--color-ink-500)"
+                  fill="var(--color-faint)"
                 >
                   {pawns}
                 </text>
@@ -147,7 +147,7 @@ export default function EvalGraph({ moves, currentPly, onSelectPly, height = 180
               y={height - 4}
               textAnchor="middle"
               fontSize="11"
-              fill="var(--color-ink-500)"
+              fill="var(--color-faint)"
             >
               {p.move.move_number}
             </text>
@@ -180,7 +180,7 @@ export default function EvalGraph({ moves, currentPly, onSelectPly, height = 180
               x2={px(active.fx)}
               y1={PAD.top}
               y2={baseline}
-              stroke="var(--color-ink-100)"
+              stroke="var(--color-text)"
             />
           )}
 
@@ -191,9 +191,9 @@ export default function EvalGraph({ moves, currentPly, onSelectPly, height = 180
                 x2={px(hovered.fx)}
                 y1={PAD.top}
                 y2={baseline}
-                stroke="var(--color-ink-500)"
+                stroke="var(--color-faint)"
               />
-              <circle cx={px(hovered.fx)} cy={py(hovered.fy)} r="5" fill="var(--color-ink-100)" />
+              <circle cx={px(hovered.fx)} cy={py(hovered.fy)} r="5" fill="var(--color-text)" />
             </>
           )}
         </svg>

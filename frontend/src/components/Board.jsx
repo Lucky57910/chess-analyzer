@@ -59,7 +59,7 @@ export default function Board({
   }, [fen, orientation, lastMove, shapes, dests, movableColor])
 
   return (
-    <div className="aspect-square w-full overflow-hidden rounded-lg ring-1 ring-ink-700">
+    <div className="aspect-square w-full overflow-hidden rounded-lg ring-1 ring-line-strong">
       <div ref={containerRef} className="h-full w-full" />
     </div>
   )

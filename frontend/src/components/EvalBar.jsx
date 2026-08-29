@@ -17,7 +17,7 @@ export default function EvalBar({ move, orientation = 'white' }) {
 
   return (
     <div
-      className="relative w-3 shrink-0 self-stretch overflow-hidden rounded-sm ring-1 ring-ink-700 sm:w-4"
+      className="relative w-3 shrink-0 self-stretch overflow-hidden rounded-sm ring-1 ring-line-strong sm:w-4"
       style={{ background: bottomIsWhite ? dark : light }}
       role="img"
       aria-label={`Évaluation ${label}`}
@@ -28,7 +28,7 @@ export default function EvalBar({ move, orientation = 'white' }) {
         style={{ height: `${bottomShare}%`, background: bottomIsWhite ? light : dark }}
       />
       {/* the 50/50 mark, so a small edge is still readable */}
-      <div className="absolute inset-x-0 top-1/2 h-px bg-ink-500/50" />
+      <div className="absolute inset-x-0 top-1/2 h-px bg-faint/50" />
     </div>
   )
 }

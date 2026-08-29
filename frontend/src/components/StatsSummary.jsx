@@ -1,20 +1,33 @@
 import { BLUNDER_CP, INACCURACY_CP, MISTAKE_CP } from '../engine/scoring.js'
+import InfoNote from './ui/Info'
 
-export function StatTile({ label, value, hint, tone = 'default', title }) {
+/**
+ * One number with its label, its trend and — when it needs one — its
+ * definition.
+ *
+ * The definitions used to be `title` attributes. On the phone this app ships
+ * to, a `title` is never shown by anything, so every one of these tiles was
+ * carrying a paragraph nobody could read. `note` puts it behind an ⓘ instead.
+ */
+export function StatTile({ label, value, hint, tone = 'default', note }) {
   const toneClass = {
-    default: 'text-ink-100',
+    default: 'text-text',
     good: 'text-good',
     warn: 'text-inaccuracy',
     bad: 'text-blunder',
   }[tone]
 
   return (
-    <div className="rounded-lg border border-ink-800 bg-ink-900 px-4 py-3" title={title}>
-      <div className="text-xs uppercase tracking-wide text-ink-500">{label}</div>
-      <div className={`mt-1 text-2xl font-semibold tabular-nums ${toneClass}`}>
-        {value ?? '—'}
+    <div className="rounded-xl border border-line bg-surface px-4 py-3">
+      <div className="flex items-center gap-0.5">
+        <span className="text-label tracking-wide text-faint uppercase">{label}</span>
+        {note && <InfoNote label={label.toLowerCase()}>{note}</InfoNote>}
       </div>
-      {hint && <div className="mt-0.5 text-xs text-ink-500">{hint}</div>}
+      <div className={`mt-1 text-2xl font-semibold tabular-nums ${toneClass}`}>{value ?? '—'}</div>
+      {/* Wraps rather than truncates: these hints carry the counts the big
+          number is an average of, which is the half that makes it mean
+          anything. */}
+      {hint && <div className="mt-0.5 text-label leading-snug text-faint">{hint}</div>}
     </div>
   )
 }
@@ -52,12 +65,24 @@ export const JUDGMENT_NOTE =
  * A headline number with nothing beside it cannot answer the only question the
  * tiles are asked, which is whether things are getting better. Direction
  * matters per field: more accuracy is progress, more blunders is not.
+ *
+ * The arrow is doubled by a word for screen readers, and the colour is never
+ * the only thing carrying the meaning.
  */
 function Delta({ value, unit = '', goodWhen = 'up' }) {
   if (value === null || value === undefined || value === 0) return null
   const better = goodWhen === 'up' ? value > 0 : value < 0
+  const direction = value > 0 ? 'en hausse de' : 'en baisse de'
   return (
-    <span className={better ? 'text-good' : 'text-blunder'}>
+    <span
+      className={better ? 'text-good' : 'text-blunder'}
+      // The arrow is the whole meaning and a screen reader reads it as
+      // "black down-pointing triangle". `role="img"` lets one label stand for
+      // the glyph and the number together, without splitting the text node
+      // the glyph sits in.
+      role="img"
+      aria-label={`${direction} ${Math.abs(value)}${unit}, ${better ? 'en progrès' : 'en recul'}`}
+    >
       {value > 0 ? '▲' : '▼'} {Math.abs(value)}
       {unit}
     </span>
@@ -79,11 +104,7 @@ export default function StatsSummary({ stats, comparison }) {
   const d = comparison?.deltas ?? {}
   return (
     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <StatTile
-        label="Parties"
-        value={stats.games}
-        hint={`${stats.analysed} analysées`}
-      />
+      <StatTile label="Parties" value={stats.games} hint={`${stats.analysed} analysées`} />
       <StatTile
         label="Score"
         value={`${stats.win_rate}%`}
@@ -91,7 +112,7 @@ export default function StatsSummary({ stats, comparison }) {
           `${stats.wins}V · ${stats.draws}N · ${stats.losses}D`,
           <Delta value={d.win_rate} unit=" pts" />,
         )}
-        title={SCORE_NOTE}
+        note={SCORE_NOTE}
         tone={stats.win_rate >= 50 ? 'good' : 'default'}
       />
       <StatTile
@@ -101,18 +122,20 @@ export default function StatsSummary({ stats, comparison }) {
           stats.avg_acpl != null ? `${stats.avg_acpl} cp perdus / coup` : undefined,
           <Delta value={d.avg_accuracy} unit=" pts" />,
         )}
-        title={`${ACCURACY_NOTE} ${CP_NOTE}`}
+        note={`${ACCURACY_NOTE} ${CP_NOTE}`}
         tone={stats.avg_accuracy >= 85 ? 'good' : stats.avg_accuracy >= 70 ? 'warn' : 'bad'}
       />
       <StatTile
         label="Gaffes / partie"
         value={stats.blunders_per_game}
-        title={`${JUDGMENT_NOTE} ${CP_NOTE}`}
+        note={`${JUDGMENT_NOTE} ${CP_NOTE}`}
         hint={withDelta(
           stats.weakest_phase ? `Phase faible : ${PHASE_LABEL[stats.weakest_phase]}` : undefined,
           <Delta value={d.blunders_per_game} goodWhen="down" />,
         )}
-        tone={stats.blunders_per_game <= 0.5 ? 'good' : stats.blunders_per_game <= 1.5 ? 'warn' : 'bad'}
+        tone={
+          stats.blunders_per_game <= 0.5 ? 'good' : stats.blunders_per_game <= 1.5 ? 'warn' : 'bad'
+        }
       />
     </div>
   )

@@ -21,12 +21,14 @@ import StatsSummary, {
   SCORE_NOTE,
   StatTile,
 } from '../components/StatsSummary'
+import Segmented from '../components/ui/Segmented'
+import { Panel, SectionTitle } from '../components/ui/Card'
 import { formatBucket } from '../data/stats.js'
 import { JUDGMENT_CLASS, JUDGMENT_LABEL } from '../utils/chess'
 import { api } from '../utils/api'
 
 const PHASE_LABEL = { opening: 'Ouverture', middlegame: 'Milieu', endgame: 'Finale' }
-const axis = { fill: 'var(--color-ink-500)', fontSize: 11 }
+const axis = { fill: 'var(--color-faint)', fontSize: 11 }
 
 /**
  * Which games the whole screen is about.
@@ -45,6 +47,13 @@ const KIND_NOTE = {
   rated: 'Parties classées uniquement : celles où le résultat comptait.',
   training: 'Parties non classées : entraîneur, ordinateur, parties amicales. Les coups repris en font partie.',
   all: 'Tout confondu — les moyennes mêlent les parties classées et l’entraînement.',
+}
+
+const TOOLTIP_STYLE = {
+  background: 'var(--color-surface)',
+  border: '1px solid var(--color-line-strong)',
+  borderRadius: 8,
+  fontSize: 12,
 }
 
 const PERIODS = ['smooth', 'day', 'week', 'month']
@@ -91,34 +100,13 @@ const JUDGMENT_SERIES = [
   { field: 'inaccuracies', label: 'Imprécisions', color: 'var(--color-inaccuracy)' },
 ]
 
-function Panel({ title, hint, children, className = '' }) {
-  return (
-    <section className={`rounded-lg border border-ink-800 bg-ink-900 ${className}`}>
-      <div className="border-b border-ink-700 px-4 py-2">
-        <h2 className="text-sm font-medium text-ink-300">{title}</h2>
-        {hint && <p className="mt-0.5 text-xs text-ink-500">{hint}</p>}
-      </div>
-      {children}
-    </section>
-  )
-}
-
-function Section({ title, subtitle }) {
-  return (
-    <div className="mt-2">
-      <h2 className="text-lg font-semibold text-ink-100">{title}</h2>
-      <p className="text-sm text-ink-500">{subtitle}</p>
-    </div>
-  )
-}
-
 /** A generic three-column table: label, count, and one number that matters. */
 function SimpleTable({ rows, head, cells, empty = 'Pas assez de données.' }) {
-  if (!rows?.length) return <p className="px-4 py-4 text-sm text-ink-500">{empty}</p>
+  if (!rows?.length) return <p className="px-4 py-4 text-body text-faint">{empty}</p>
   return (
-    <table className="w-full text-sm">
+    <table className="w-full text-body">
       <thead>
-        <tr className="text-xs uppercase tracking-wide text-ink-500">
+        <tr className="text-label uppercase tracking-wide text-faint">
           {head.map((label, i) => (
             <th
               key={label}
@@ -129,7 +117,7 @@ function SimpleTable({ rows, head, cells, empty = 'Pas assez de données.' }) {
           ))}
         </tr>
       </thead>
-      <tbody className="divide-y divide-ink-800">
+      <tbody className="divide-y divide-line">
         {rows.map((row, i) => (
           <tr key={row.key ?? row.name ?? i}>
             {cells(row).map((value, j) => (
@@ -137,8 +125,8 @@ function SimpleTable({ rows, head, cells, empty = 'Pas assez de données.' }) {
                 key={j}
                 className={`py-2 ${
                   j === 0
-                    ? 'max-w-0 truncate px-4 text-ink-100'
-                    : 'px-2 text-right tabular-nums text-ink-300'
+                    ? 'px-4 text-text'
+                    : 'px-2 text-right tabular-nums whitespace-nowrap text-muted'
                 }`}
               >
                 {value}
@@ -152,11 +140,11 @@ function SimpleTable({ rows, head, cells, empty = 'Pas assez de données.' }) {
 }
 
 function BreakdownTable({ rows }) {
-  if (!rows?.length) return <p className="px-4 py-4 text-sm text-ink-500">Pas de données.</p>
+  if (!rows?.length) return <p className="px-4 py-4 text-body text-faint">Pas de données.</p>
   return (
-    <table className="w-full text-sm">
+    <table className="w-full text-body">
       <thead>
-        <tr className="text-xs uppercase tracking-wide text-ink-500">
+        <tr className="text-label uppercase tracking-wide text-faint">
           <th className="px-4 py-2 text-left font-normal">Nom</th>
           <th className="px-2 py-2 text-right font-normal">Parties</th>
           <th className="px-2 py-2 text-right font-normal" title={SCORE_NOTE}>
@@ -167,13 +155,13 @@ function BreakdownTable({ rows }) {
           </th>
         </tr>
       </thead>
-      <tbody className="divide-y divide-ink-800">
+      <tbody className="divide-y divide-line">
         {rows.map((r) => (
           <tr key={r.name}>
-            <td className="max-w-0 truncate px-4 py-2 text-ink-100">{r.name}</td>
-            <td className="px-2 py-2 text-right tabular-nums text-ink-300">{r.games}</td>
-            <td className="px-2 py-2 text-right tabular-nums text-ink-300">{r.win_rate}%</td>
-            <td className="px-4 py-2 text-right tabular-nums text-ink-300">
+            <td className="px-4 py-2 text-text">{r.name}</td>
+            <td className="px-2 py-2 text-right tabular-nums text-muted">{r.games}</td>
+            <td className="px-2 py-2 text-right tabular-nums text-muted">{r.win_rate}%</td>
+            <td className="px-4 py-2 text-right tabular-nums text-muted">
               {r.avg_accuracy != null ? `${r.avg_accuracy}%` : '—'}
             </td>
           </tr>
@@ -229,8 +217,8 @@ export default function Stats() {
       .catch((err) => setError(err.message))
   }, [period, kind])
 
-  if (error) return <p className="text-sm text-blunder">{error}</p>
-  if (!stats) return <p className="text-sm text-ink-500">Chargement…</p>
+  if (error) return <p className="text-body text-blunder">{error}</p>
+  if (!stats) return <p className="text-body text-faint">Chargement…</p>
 
   const phaseData = Object.entries(stats.phase_acpl).map(([phase, acpl]) => ({
     phase: PHASE_LABEL[phase],
@@ -251,27 +239,14 @@ export default function Stats() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <h1 className="text-xl font-semibold">Statistiques</h1>
-        <div className="flex gap-2">
-          {KINDS.map(({ key, label }) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setKind(key)}
-              className={`rounded-md px-2.5 py-1 text-xs ${
-                key === kind ? 'bg-ink-700 text-ink-100' : 'text-ink-500 hover:bg-ink-800'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
+        <Segmented label="Quelles parties" value={kind} options={KINDS} onChange={setKind} />
       </div>
-      <p className="-mt-4 text-xs text-ink-500">{KIND_NOTE[kind]}</p>
+      <p className="-mt-4 text-label text-faint">{KIND_NOTE[kind]}</p>
 
       <StatsSummary stats={stats} comparison={insights?.comparison} />
 
       {insights?.comparison && (
-        <p className="text-xs text-ink-500">
+        <p className="text-label text-faint">
           Les flèches comparent les {insights.comparison.days} derniers jours aux{' '}
           {insights.comparison.days} précédents
           {insights.comparison.previous
@@ -293,7 +268,7 @@ export default function Stats() {
                 : null
             }
             hint={`${insights.conversion.converted} gagnées sur ${insights.conversion.winning_positions} positions gagnantes`}
-            title="Part des parties où vous avez atteint +2 pions d’avantage et qui se sont terminées par une victoire."
+            note="Part des parties où vous avez atteint +2 pions d’avantage et qui se sont terminées par une victoire."
             tone={insights.conversion.conversion_rate >= 80 ? 'good' : 'warn'}
           />
           <StatTile
@@ -302,7 +277,7 @@ export default function Stats() {
               insights.conversion.save_rate != null ? `${insights.conversion.save_rate}%` : null
             }
             hint={`${insights.conversion.saved} sauvées sur ${insights.conversion.losing_positions} positions perdues`}
-            title="Part des parties où vous êtes tombé à −2 pions et que vous n’avez pas perdues."
+            note="Part des parties où vous êtes tombé à −2 pions et que vous n’avez pas perdues."
             tone={insights.conversion.save_rate >= 20 ? 'good' : 'default'}
           />
         </div>
@@ -312,20 +287,14 @@ export default function Stats() {
           granularity from a button row buried in the first one reads as a
           coincidence rather than a setting. */}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm text-ink-300">Granularité</span>
-        {PERIODS.map((p) => (
-          <button
-            key={p}
-            type="button"
-            onClick={() => setPeriod(p)}
-            className={`rounded-md px-2.5 py-1 text-xs ${
-              p === period ? 'bg-ink-700 text-ink-100' : 'text-ink-500 hover:bg-ink-800'
-            }`}
-          >
-            {PERIOD_LABEL[p]}
-          </button>
-        ))}
-        <span className="ml-auto text-xs text-ink-500">{bucketCount(trends.length, period)}</span>
+        <span className="text-body text-muted">Granularité</span>
+        <Segmented
+          label="Granularité des courbes"
+          value={period}
+          options={PERIODS.map((p) => ({ key: p, label: PERIOD_LABEL[p] }))}
+          onChange={setPeriod}
+        />
+        <span className="ml-auto text-label text-faint">{bucketCount(trends.length, period)}</span>
       </div>
 
       <Panel
@@ -339,30 +308,25 @@ export default function Stats() {
         <div className="h-64 p-3">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={trends} margin={{ top: 8, right: 12, bottom: 0, left: -20 }}>
-              <CartesianGrid stroke="var(--color-ink-700)" strokeDasharray="2 4" vertical={false} />
+              <CartesianGrid stroke="var(--color-line-strong)" strokeDasharray="2 4" vertical={false} />
               <XAxis
                 dataKey="period"
                 tick={axis}
-                stroke="var(--color-ink-700)"
+                stroke="var(--color-line-strong)"
                 minTickGap={20}
                 tickFormatter={(key) => formatBucket(key, period)}
               />
               <YAxis
                 domain={[0, 100]}
                 tick={axis}
-                stroke="var(--color-ink-700)"
+                stroke="var(--color-line-strong)"
                 unit="%"
                 width={44}
               />
               <Tooltip
                 formatter={(value, name) => [value == null ? '—' : `${value} %`, name]}
                 labelFormatter={(key) => `${PERIOD_LABEL[period]} ${key}`}
-                contentStyle={{
-                  background: 'var(--color-ink-900)',
-                  border: '1px solid var(--color-ink-700)',
-                  borderRadius: 6,
-                  fontSize: 12,
-                }}
+                contentStyle={TOOLTIP_STYLE}
               />
               {/* Two anonymous lines is what made this chart unreadable: nothing
                   on screen said which was which, or what either measured. */}
@@ -370,7 +334,7 @@ export default function Stats() {
                 verticalAlign="bottom"
                 height={28}
                 iconType="plainline"
-                wrapperStyle={{ fontSize: 12, color: 'var(--color-ink-300)' }}
+                wrapperStyle={{ fontSize: 12, color: 'var(--color-muted)' }}
               />
               <Line
                 type="monotone"
@@ -424,49 +388,38 @@ export default function Stats() {
         }
       >
         <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
-          {Object.entries(NORMALISE).map(([key, { label }]) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setNormalise(key)}
-              className={`rounded-md px-2.5 py-1 text-xs ${
-                key === normalise ? 'bg-ink-700 text-ink-100' : 'text-ink-500 hover:bg-ink-800'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-          <span className="ml-auto text-xs text-ink-500">{judgmentTotal}</span>
+          <Segmented
+            label="Comment compter les fautes"
+            value={normalise}
+            options={Object.entries(NORMALISE).map(([key, { label }]) => ({ key, label }))}
+            onChange={setNormalise}
+          />
+          <span className="ml-auto text-label text-faint">{judgmentTotal}</span>
         </div>
         <div className="h-64 p-3">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={judgments} margin={{ top: 8, right: 12, bottom: 0, left: -20 }}>
-              <CartesianGrid stroke="var(--color-ink-700)" strokeDasharray="2 4" vertical={false} />
+              <CartesianGrid stroke="var(--color-line-strong)" strokeDasharray="2 4" vertical={false} />
               <XAxis
                 dataKey="period"
                 tick={axis}
-                stroke="var(--color-ink-700)"
+                stroke="var(--color-line-strong)"
                 minTickGap={20}
                 tickFormatter={(key) => formatBucket(key, period)}
               />
-              <YAxis tick={axis} stroke="var(--color-ink-700)" width={44} allowDecimals={false} />
+              <YAxis tick={axis} stroke="var(--color-line-strong)" width={44} allowDecimals={false} />
               <Tooltip
                 formatter={(value, name) => [
                   value == null ? '—' : `${value} ${NORMALISE[normalise].unit}`,
                   name,
                 ]}
                 labelFormatter={(key) => `${PERIOD_LABEL[period]} ${key}`}
-                contentStyle={{
-                  background: 'var(--color-ink-900)',
-                  border: '1px solid var(--color-ink-700)',
-                  borderRadius: 6,
-                  fontSize: 12,
-                }}
+                contentStyle={TOOLTIP_STYLE}
               />
               <Legend
                 verticalAlign="bottom"
                 height={28}
-                wrapperStyle={{ fontSize: 12, color: 'var(--color-ink-300)' }}
+                wrapperStyle={{ fontSize: 12, color: 'var(--color-muted)' }}
               />
               {/* Declared worst-first so blunders sit on the axis: the band
                   that matters is the one you can read without adding up the
@@ -489,7 +442,7 @@ export default function Stats() {
         </div>
       </Panel>
 
-      <Section
+      <SectionTitle
         title="Où vous perdez des points"
         subtitle="Ce que coûtent vos coups, et dans quelles conditions ils partent de travers."
       />
@@ -502,21 +455,16 @@ export default function Stats() {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={phaseData} margin={{ top: 8, right: 12, bottom: 0, left: -20 }}>
                 <CartesianGrid
-                  stroke="var(--color-ink-700)"
+                  stroke="var(--color-line-strong)"
                   strokeDasharray="2 4"
                   vertical={false}
                 />
-                <XAxis dataKey="phase" tick={axis} stroke="var(--color-ink-700)" />
-                <YAxis tick={axis} stroke="var(--color-ink-700)" />
+                <XAxis dataKey="phase" tick={axis} stroke="var(--color-line-strong)" />
+                <YAxis tick={axis} stroke="var(--color-line-strong)" />
                 <Tooltip
-                  cursor={{ fill: 'var(--color-ink-800)' }}
+                  cursor={{ fill: 'var(--color-raised)' }}
                   formatter={(value) => [`${value} cp (${(value / 100).toFixed(2)} pion)`, 'Perte moyenne']}
-                  contentStyle={{
-                    background: 'var(--color-ink-900)',
-                    border: '1px solid var(--color-ink-700)',
-                    borderRadius: 6,
-                    fontSize: 12,
-                  }}
+                  contentStyle={TOOLTIP_STYLE}
                 />
                 <Bar
                   dataKey="acpl"
@@ -539,10 +487,10 @@ export default function Stats() {
             hint={`Temps médian par coup : ${insights.clock.median_seconds} s, sur ${insights.clock.games} parties chronométrées.`}
           >
             {insights.clock.fast_blunder_share != null && (
-              <p className="px-4 pt-3 text-sm text-ink-300">
+              <p className="px-4 pt-3 text-body text-muted">
                 <span
                   className={
-                    insights.clock.fast_blunder_share >= 50 ? 'text-blunder' : 'text-ink-100'
+                    insights.clock.fast_blunder_share >= 50 ? 'text-blunder' : 'text-text'
                   }
                 >
                   {insights.clock.fast_blunder_share}%
@@ -588,7 +536,7 @@ export default function Stats() {
         </Panel>
       </div>
 
-      <Section
+      <SectionTitle
         title="Contre qui, et avec quoi"
         subtitle="Les mêmes résultats découpés par adversaire, cadence, couleur et répertoire."
       />
@@ -641,18 +589,18 @@ export default function Stats() {
 
       {/* The tables put score and accuracy side by side in the same percent
           format, which reads as two spellings of one number. They are not. */}
-      <dl className="grid gap-3 rounded-lg border border-ink-800 bg-ink-900 px-4 py-3 text-xs sm:grid-cols-3">
+      <dl className="grid gap-3 rounded-lg border border-line bg-surface px-4 py-3 text-label sm:grid-cols-3">
         <div>
-          <dt className="font-medium text-ink-300">Score</dt>
-          <dd className="mt-0.5 text-ink-500">{SCORE_NOTE}</dd>
+          <dt className="font-medium text-muted">Score</dt>
+          <dd className="mt-0.5 text-faint">{SCORE_NOTE}</dd>
         </div>
         <div>
-          <dt className="font-medium text-ink-300">Précision</dt>
-          <dd className="mt-0.5 text-ink-500">{ACCURACY_NOTE}</dd>
+          <dt className="font-medium text-muted">Précision</dt>
+          <dd className="mt-0.5 text-faint">{ACCURACY_NOTE}</dd>
         </div>
         <div>
-          <dt className="font-medium text-ink-300">Centipion (cp)</dt>
-          <dd className="mt-0.5 text-ink-500">
+          <dt className="font-medium text-muted">Centipion (cp)</dt>
+          <dd className="mt-0.5 text-faint">
             {CP_NOTE} {JUDGMENT_NOTE}
           </dd>
         </div>
@@ -673,7 +621,7 @@ export default function Stats() {
                 margin={{ top: 8, right: 12, bottom: 0, left: -20 }}
               >
                 <CartesianGrid
-                  stroke="var(--color-ink-700)"
+                  stroke="var(--color-line-strong)"
                   strokeDasharray="2 4"
                   vertical={false}
                 />
@@ -685,20 +633,15 @@ export default function Stats() {
                   dataKey="move_number"
                   domain={['dataMin', 'dataMax']}
                   tick={axis}
-                  stroke="var(--color-ink-700)"
+                  stroke="var(--color-line-strong)"
                   allowDecimals={false}
                 />
-                <YAxis tick={axis} stroke="var(--color-ink-700)" allowDecimals={false} width={44} />
+                <YAxis tick={axis} stroke="var(--color-line-strong)" allowDecimals={false} width={44} />
                 <Tooltip
-                  cursor={{ fill: 'var(--color-ink-800)' }}
+                  cursor={{ fill: 'var(--color-raised)' }}
                   formatter={(value) => [value, 'Fautes']}
                   labelFormatter={(n) => `Coup ${n}`}
-                  contentStyle={{
-                    background: 'var(--color-ink-900)',
-                    border: '1px solid var(--color-ink-700)',
-                    borderRadius: 6,
-                    fontSize: 12,
-                  }}
+                  contentStyle={TOOLTIP_STYLE}
                 />
                 <Bar dataKey="count" name="Fautes" fill="var(--color-blunder)" />
               </BarChart>
@@ -715,22 +658,22 @@ export default function Stats() {
         hint="Votre pire coup par partie, et seulement ceux joués dans une position encore jouable."
       >
         {insights?.costly_mistakes?.length ? (
-          <ul className="divide-y divide-ink-800">
+          <ul className="divide-y divide-line">
             {insights.costly_mistakes.map((m, i) => (
               <li key={`${m.game_id}-${m.ply}-${i}`}>
                 <Link
                   to={`/games/${m.game_id}`}
-                  className="flex items-baseline justify-between gap-3 px-4 py-2 text-sm hover:bg-ink-800"
+                  className="flex items-baseline justify-between gap-3 px-4 py-2 text-body hover:bg-raised"
                 >
                   <span>
-                    <span className="font-mono text-ink-500">{m.move_number}.</span>{' '}
-                    <span className="font-mono text-ink-100">{m.san}</span>{' '}
+                    <span className="font-mono text-faint">{m.move_number}.</span>{' '}
+                    <span className="font-mono text-text">{m.san}</span>{' '}
                     <span className={JUDGMENT_CLASS[m.judgment]}>
                       {JUDGMENT_LABEL[m.judgment]}
                     </span>{' '}
-                    <span className="text-ink-500">vs {m.opponent}</span>
+                    <span className="text-faint">vs {m.opponent}</span>
                   </span>
-                  <span className="shrink-0 font-mono text-xs text-ink-500">
+                  <span className="shrink-0 font-mono text-label text-faint">
                     −{(m.cp_loss / 100).toFixed(2)} · mieux : {m.best_move_san}
                   </span>
                 </Link>
@@ -738,7 +681,7 @@ export default function Stats() {
             ))}
           </ul>
         ) : (
-          <p className="px-4 py-4 text-sm text-ink-500">Rien à signaler pour l’instant.</p>
+          <p className="px-4 py-4 text-body text-faint">Rien à signaler pour l’instant.</p>
         )}
       </Panel>
     </div>
