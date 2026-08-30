@@ -40,7 +40,7 @@ vi.mock("../utils/api", () => {
       chess_com_username: "maxime",
       last_synced_at: "2026-08-26T10:00:00.000Z",
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: false },
+      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: false },
     })),
     updateSettings: vi.fn(async (patch) => ({
       chess_com_username: patch.chess_com_username?.trim() ?? "maxime",
@@ -48,7 +48,7 @@ vi.mock("../utils/api", () => {
       engine_depth: 18,
       coach: {
         provider: patch.coach?.provider ?? "gemini",
-        model: patch.coach?.model ?? "gemini-2.5-flash",
+        model: patch.coach?.model ?? "gemini-3.7-flash",
         key_set: patch.coach?.apiKey ? true : false,
       },
     })),
@@ -936,7 +936,7 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
     });
     renderApp("/games/1");
     expect(await screen.findByRole("button", { name: /Faire commenter par le coach/ })).toBeDefined();
@@ -947,7 +947,7 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
     });
     renderApp("/games/1");
     fireEvent.click(await screen.findByRole("button", { name: /Faire commenter par le coach/ }));
@@ -967,7 +967,7 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
     });
     renderApp("/games/1");
     fireEvent.click(await screen.findByRole("button", { name: /Faire commenter par le coach/ }));
@@ -986,7 +986,7 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
     });
     renderApp("/games/1");
     fireEvent.click(await screen.findByRole("button", { name: /Faire commenter par le coach/ }));
@@ -1009,7 +1009,7 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
     });
     // Two notes already stored, one added by this run: the status line has to
     // say three, because three is what the reader can now see on the board.
@@ -1028,7 +1028,7 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
     });
     api.coachGame.mockRejectedValueOnce(new Error("Quota du modèle atteint."));
     renderApp("/games/1");
@@ -1043,7 +1043,7 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-2.5-flash", key_set: true },
+      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
     });
     renderApp("/settings");
     expect(await screen.findByText(/une clé est enregistrée/)).toBeDefined();
@@ -1060,7 +1060,7 @@ describe("the coach", () => {
 
     await waitFor(() =>
       expect(api.updateSettings).toHaveBeenCalledWith({
-        coach: { provider: "gemini", model: "gemini-2.5-flash", apiKey: "AIza-test" },
+        coach: { provider: "gemini", model: "gemini-3.7-flash", apiKey: "AIza-test" },
       }),
     );
   });

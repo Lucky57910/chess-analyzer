@@ -30,6 +30,7 @@ import {
 import { createLimiter, retryDelay } from "../throttle.js";
 import { narrate } from "../narrate.js";
 import { PROVIDERS } from "../providers.js";
+import { readCoachConfig, SETTING_COACH_MODEL, SETTING_COACH_PROVIDER } from "../config.js";
 
 /** A four-move game with one judged blunder for White. */
 const GAME = {
@@ -173,13 +174,25 @@ function virtualClock(start = 1_700_000_000_000) {
   };
 }
 
+// The Interactions API answers with a timeline. A thinking step sits in front
+// of the output on the 3.x models, and picking it up instead would produce a
+// parse failure rather than a comment, so the fixture carries one.
 const geminiReply = (comments) => ({
   status: 200,
-  data: { candidates: [{ content: { parts: [{ text: JSON.stringify({ comments }) }] } }] },
+  data: {
+    status: "completed",
+    steps: [
+      { type: "thinking", content: [{ type: "text", text: "Le cavalier est en prise…" }] },
+      {
+        type: "model_output",
+        content: [{ type: "text", text: JSON.stringify({ comments }) }],
+      },
+    ],
+  },
 });
 
 describe("commenting a whole game", () => {
-  const config = { provider: "gemini", model: "gemini-2.5-flash", apiKey: "test-key" };
+  const config = { provider: "gemini", model: "gemini-3.7-flash", apiKey: "test-key" };
 
   it("keys the commentary by ply and reports nothing failed", async () => {
     const { http, calls } = fakeHttp([
@@ -512,5 +525,68 @@ describe("the clock and the structure in the digest", () => {
     const [chunk] = buildDigest({ game: TIMED, analysis: ANALYSIS });
     expect(chunk.text).not.toContain(TIMED.pgn);
     expect(chunk.text).not.toMatch(/%clk/);
+  });
+});
+
+/**
+ * A provider retires a model generation by closing it to new keys, and the
+ * app finds out as a 400 the user reads as "the coach is broken". Both halves
+ * of the defence are here: the request has to match what the provider
+ * currently documents, and a name saved before the change has to be dropped
+ * rather than sent.
+ */
+describe("outliving a model generation", () => {
+  const settings = (rows) => ({
+    getSetting: async (key, fallback) => rows[key] ?? fallback,
+    setSetting: async () => {},
+  });
+
+  it("asks Gemini over the Interactions API, with the model in the body", () => {
+    const { url, data } = PROVIDERS.gemini.request({
+      apiKey: "k",
+      model: "gemini-3.7-flash",
+      system: "s",
+      user: "u",
+      maxTokens: 100,
+    });
+    expect(url).toBe("https://generativelanguage.googleapis.com/v1beta/interactions");
+    expect(url).not.toContain("generateContent");
+    expect(data.model).toBe("gemini-3.7-flash");
+    expect(data.input).toBe("u");
+    expect(data.system_instruction).toBe("s");
+  });
+
+  it("sends none of the sampling parameters 3.x rejects", () => {
+    const { data } = PROVIDERS.gemini.request({ apiKey: "k", model: "m", maxTokens: 10 });
+    const sent = JSON.stringify(data);
+    for (const dead of ["temperature", "top_p", "topP", "top_k", "topK", "thinking_budget"]) {
+      expect(sent).not.toContain(dead);
+    }
+    expect(data.generation_config.max_output_tokens).toBe(10);
+  });
+
+  it("reads the model's step and leaves the thinking behind", () => {
+    const text = PROVIDERS.gemini.text({
+      steps: [
+        { type: "thinking", content: [{ type: "text", text: "not this" }] },
+        { type: "model_output", content: [{ type: "text", text: "this" }] },
+      ],
+    });
+    expect(text).toBe("this");
+  });
+
+  it("drops a stored model the provider no longer offers", async () => {
+    const config = await readCoachConfig(
+      settings({ [SETTING_COACH_PROVIDER]: "gemini", [SETTING_COACH_MODEL]: "gemini-2.5-flash" }),
+    );
+    expect(config.model).toBe(PROVIDERS.gemini.models[0]);
+  });
+
+  it("keeps a stored model that is still offered", async () => {
+    const chosen = PROVIDERS.gemini.models[1];
+    const config = await readCoachConfig(
+      settings({ [SETTING_COACH_PROVIDER]: "gemini", [SETTING_COACH_MODEL]: chosen }),
+    );
+    expect(config.model).toBe(chosen);
   });
 });

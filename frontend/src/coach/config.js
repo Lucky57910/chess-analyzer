@@ -30,9 +30,14 @@ export const SETTING_COACH_KEY = "coach_api_key";
 export async function readCoachConfig(repo) {
   const provider = await repo.getSetting(SETTING_COACH_PROVIDER, DEFAULT_PROVIDER);
   const adapter = providerFor(provider);
+  const stored = await repo.getSetting(SETTING_COACH_MODEL, "");
   return {
     provider: adapter.key,
-    model: (await repo.getSetting(SETTING_COACH_MODEL, "")) || adapter.models[0],
+    // A stored name the adapter no longer offers is dropped rather than sent.
+    // Providers retire a model generation by closing it to new keys, so the
+    // phone that picked `gemini-2.5-flash` a month ago would otherwise keep
+    // asking for it and keep getting a 400 that reads like a broken app.
+    model: adapter.models.includes(stored) ? stored : adapter.models[0],
     apiKey: (await repo.getSetting(SETTING_COACH_KEY, "")) || "",
   };
 }

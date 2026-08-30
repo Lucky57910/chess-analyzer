@@ -114,10 +114,11 @@ function CoachSettings({ config, onSave, busy }) {
       <div className="flex flex-col gap-2 rounded-lg border border-inaccuracy/40 bg-inaccuracy/10 px-3 py-2">
         <p className="text-label leading-relaxed text-muted">
           <span className="font-medium text-inaccuracy">Vos parties quittent le téléphone.</span>{' '}
-          Activer le coach envoie à {adapter.label} ce que le moteur a trouvé sur vos coups. Sur un
-          palier gratuit, ce contenu sert en général à entraîner les modèles du fournisseur ; les
-          paliers payants ne le font pas. Rien n’est envoyé tant que vous n’appuyez pas sur le
-          bouton, sur l’écran d’une partie.
+          Activer le coach envoie à {adapter.label} ce que le moteur a trouvé sur vos coups.{' '}
+          {adapter.key === 'gemini'
+            ? 'Depuis l’Europe, Google applique au palier gratuit les règles du palier payant : ce contenu ne sert pas à entraîner ses modèles. Ses conditions réservent en revanche le palier gratuit au développement — partager cette application avec d’autres personnes en Europe demanderait un palier payant.'
+            : 'Sur un palier gratuit, ce contenu sert en général à entraîner les modèles du fournisseur ; les paliers payants ne le font pas.'}{' '}
+          Rien n’est envoyé tant que vous n’appuyez pas sur le bouton, sur l’écran d’une partie.
         </p>
         <p className="text-label leading-relaxed text-muted">
           <span className="font-medium text-inaccuracy">La clé est stockée en clair</span> dans la
