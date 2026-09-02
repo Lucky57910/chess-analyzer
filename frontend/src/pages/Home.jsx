@@ -6,6 +6,7 @@ import GameList from '../components/GameList'
 import StatsSummary from '../components/StatsSummary'
 import Button from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
+import Segmented from '../components/ui/Segmented'
 import { formatBucket } from '../data/stats.js'
 import { useQueue } from '../hooks/useQueue'
 import { useSettings } from '../hooks/useSettings'
@@ -20,6 +21,31 @@ const PHASE_LABEL = {
 
 /** Days of history behind the small curve. Enough to see a direction. */
 const CURVE_DAYS = 30
+
+/**
+ * The window the headline numbers describe.
+ *
+ * A week is what you can still remember playing; a month has enough games in
+ * it to mean something. Neither is right on its own, so it is a setting rather
+ * than a constant.
+ */
+const WINDOWS = [
+  { key: 7, label: '7 jours' },
+  { key: 30, label: '30 jours' },
+]
+
+/**
+ * What the arrows are measured against.
+ *
+ * Two different questions. Against the window before: "better than last week",
+ * which over seven games moves a lot for reasons that are not you. Against the
+ * archive: "better than usual", which barely moves — and that is the point, a
+ * change visible against your whole history is a real one.
+ */
+const BASELINES = [
+  { key: 'previous', label: 'Période précédente' },
+  { key: 'all', label: 'Historique' },
+]
 
 /**
  * A block of the home screen.
@@ -51,21 +77,39 @@ export default function Home() {
   const { username } = useSettings()
   const { running, processed, progress, status, start } = useQueue()
   const [insights, setInsights] = useState(null)
+  const [lifetime, setLifetime] = useState(null)
   const [mistakes, setMistakes] = useState(null)
   const [curve, setCurve] = useState([])
   const [recent, setRecent] = useState([])
+  const [days, setDays] = useState(7)
+  const [baseline, setBaseline] = useState('previous')
   const [error, setError] = useState(null)
+
+  // Split from the load below: changing the window changes only the
+  // comparison, and rebuilding the curve and the last three games with it
+  // would be three more passes over the archive for numbers that cannot have
+  // moved.
+  useEffect(() => {
+    if (!username) return
+    api
+      .insights({ kind: 'rated', comparison: { days, baseline } })
+      .then((i) => {
+        setInsights(i)
+        setError(null)
+      })
+      .catch((err) => setError(err.message))
+  }, [username, processed, days, baseline])
 
   useEffect(() => {
     if (!username) return
     Promise.all([
-      api.insights({ kind: 'rated' }),
+      api.stats(undefined, 'rated'),
       api.mistakes('rated'),
       api.smoothedTrends(3, CURVE_DAYS, 'rated'),
       api.gamesPage({ limit: 3 }),
     ])
-      .then(([i, m, c, page]) => {
-        setInsights(i)
+      .then(([s, m, c, page]) => {
+        setLifetime(s)
         setMistakes(m)
         setCurve(c)
         setRecent(page.games)
@@ -103,7 +147,12 @@ export default function Home() {
     null,
   )
   const weakness = [
-    summary?.weakest_phase ? `vous perdez le plus dans ${PHASE_LABEL[summary.weakest_phase]}` : null,
+    // Read off the whole archive rather than off the window: a weak phase
+    // named from the four games of a quiet week is a coin toss, and this
+    // sentence is the one piece of advice on the screen.
+    lifetime?.weakest_phase
+      ? `vous perdez le plus dans ${PHASE_LABEL[lifetime.weakest_phase]}`
+      : null,
     worstMoveNumber
       ? `et vos fautes se concentrent autour du coup ${worstMoveNumber.move_number}`
       : null,
@@ -131,11 +180,38 @@ export default function Home() {
         )}
       </div>
 
+      {/* The two settings the tiles depend on, next to the tiles they change.
+          Nothing else on this screen moves when they do. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Segmented label="Période" value={days} options={WINDOWS} onChange={setDays} />
+        <span className="text-label text-faint">comparée à</span>
+        <Segmented
+          label="Point de comparaison"
+          value={baseline}
+          options={BASELINES}
+          onChange={setBaseline}
+        />
+      </div>
+
       {summary ? (
         <StatsSummary stats={summary} comparison={comparison} />
       ) : (
         <p className="rounded-xl border border-dashed border-line-strong p-6 text-center text-body text-faint">
           Aucune partie classée sur la période. Lancez une synchronisation depuis l’onglet Parties.
+        </p>
+      )}
+
+      {/* What the arrows on the tiles above mean, spelled out: an arrow with
+          no stated reference is a number the reader has to trust. */}
+      {summary && (
+        <p className="-mt-2 text-label leading-snug text-faint">
+          {comparison.previous
+            ? comparison.baseline === 'all'
+              ? `Les flèches comparent ces ${comparison.days} jours à tout ce qui précède (${comparison.previous.games} parties).`
+              : `Les flèches comparent ces ${comparison.days} jours aux ${comparison.days} précédents (${comparison.previous.games} parties).`
+            : comparison.baseline === 'all'
+              ? 'Rien avant cette période : tout votre historique tient dedans.'
+              : 'Pas de période précédente à comparer — essayez « Historique ».'}
         </p>
       )}
 

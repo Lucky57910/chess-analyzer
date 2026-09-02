@@ -498,15 +498,26 @@ export function clockPressure(games) {
 const HEADLINE = ["win_rate", "avg_accuracy", "blunders_per_game", "avg_acpl"];
 
 /**
- * The same four headline numbers over this window and the one before it.
+ * The same four headline numbers over this window and something to read them
+ * against.
  *
  * A number with nothing to compare it to cannot say whether things are getting
  * better, which is the only question the summary tiles are asked. Both windows
  * are measured back from the newest game rather than from today, matching what
  * `api.stats(days)` does: opening the app after a fortnight away should not
  * show two empty windows.
+ *
+ * Two baselines, because they answer different questions and a week of play
+ * can only honestly answer one of them:
+ *
+ *   - `previous`: the window of the same length just before this one. "Am I
+ *     playing better than last week." Sharp, and noisy - seven games against
+ *     seven games is a sample where one bad evening is the whole delta.
+ *   - `all`: everything older than the window. "Is this week better than how I
+ *     usually play." Steady, and it stops moving once the archive is large,
+ *     which is what makes a small recent change visible against it.
  */
-export function periodComparison(games, { days = 30 } = {}) {
+export function periodComparison(games, { days = 30, baseline = "previous" } = {}) {
   const newest = games.reduce((max, g) => Math.max(max, g.end_time ?? 0), 0);
   if (!newest) return null;
 
@@ -514,7 +525,10 @@ export function periodComparison(games, { days = 30 } = {}) {
   const inWindow = (game, from, to) => (game.end_time ?? 0) > from && (game.end_time ?? 0) <= to;
 
   const current = games.filter((g) => inWindow(g, newest - span, newest));
-  const previous = games.filter((g) => inWindow(g, newest - 2 * span, newest - span));
+  const previous =
+    baseline === "all"
+      ? games.filter((g) => (g.end_time ?? 0) <= newest - span)
+      : games.filter((g) => inWindow(g, newest - 2 * span, newest - span));
   if (!current.length) return null;
 
   const now = computeStats(current);
@@ -528,7 +542,51 @@ export function periodComparison(games, { days = 30 } = {}) {
       a === null || a === undefined || b === null || b === undefined ? null : roundTo(a - b, 2);
   }
 
-  return { days, current: now, previous: before, deltas };
+  return { days, baseline, current: now, previous: before, deltas };
+}
+
+/* ------------------------------------------------------------------ *
+ * Who you were playing                                                *
+ * ------------------------------------------------------------------ */
+
+/**
+ * The opponents' rating, split by how the game ended.
+ *
+ * `byRatingGap` already answers "do you beat the people you should beat", band
+ * by band. This is the other half of the same question and the one that fits
+ * in a sentence: the average opponent you beat, the average opponent who beat
+ * you, and the distance between the two. A player whose wins come from 80
+ * points below and whose losses come from 20 points above is not unlucky -
+ * they are being paired above the level they convert at.
+ *
+ * `gap` is signed the way the rest of this file signs it: positive means the
+ * opponent was rated above the user. Games with either rating missing are left
+ * out entirely rather than counted at zero - an unrated game would otherwise
+ * drag every average toward it.
+ */
+export function opponentStrength(games) {
+  const rated = games.filter((g) => g.user_rating && g.opponent_rating);
+  const summarise = (group) => ({
+    games: group.length,
+    avg_opponent_rating: mean(group.map((g) => g.opponent_rating), 0),
+    avg_user_rating: mean(group.map((g) => g.user_rating), 0),
+    avg_gap: mean(group.map((g) => g.opponent_rating - g.user_rating), 0),
+  });
+
+  const by = (result) => summarise(rated.filter((g) => g.result === result));
+  const wins = by("win");
+  const losses = by("loss");
+
+  return {
+    ...summarise(rated),
+    by_result: { win: wins, draw: by("draw"), loss: losses },
+    // What the screen actually says out loud. Null unless both sides have
+    // games, because a difference against nothing is not a difference.
+    win_loss_gap:
+      wins.games && losses.games
+        ? roundTo(losses.avg_opponent_rating - wins.avg_opponent_rating, 0)
+        : null,
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -551,6 +609,7 @@ export function computeInsights(games, options = {}) {
     opening_exit: openingExit(games, options.opening),
     session_tilt: sessionTilt(games),
     clock: clockPressure(games),
+    opponent_strength: opponentStrength(games),
     comparison: periodComparison(games, options.comparison),
   };
 }

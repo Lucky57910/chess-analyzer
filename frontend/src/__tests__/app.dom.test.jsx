@@ -122,6 +122,7 @@ vi.mock("../utils/api", () => {
     })),
     sync: vi.fn(async () => ({ imported: 0, updated: 0, skipped: 0, pending_analysis: 3 })),
     refresh: vi.fn(async () => ({ status: "pending" })),
+    reclaimStuck: vi.fn(async () => ({ requeued: 0, retired: 0 })),
     // Answers like the UCI driver: White's point of view, plus the move it
     // would play. The reply is always the first legal move, which is enough
     // for the board to move and keeps the fixture from needing a real search.
@@ -260,8 +261,21 @@ vi.mock("../utils/api", () => {
           { key: "slow", name: "plus de 30 s", moves: 40, blunders: 0, blunder_rate: 0 },
         ],
       },
+      opponent_strength: {
+        games: 9,
+        avg_opponent_rating: 1240,
+        avg_user_rating: 1200,
+        avg_gap: 40,
+        by_result: {
+          win: { games: 5, avg_opponent_rating: 1180, avg_user_rating: 1200, avg_gap: -20 },
+          draw: { games: 0, avg_opponent_rating: null, avg_user_rating: null, avg_gap: null },
+          loss: { games: 4, avg_opponent_rating: 1310, avg_user_rating: 1200, avg_gap: 110 },
+        },
+        win_loss_gap: 130,
+      },
       comparison: {
         days: 30,
+        baseline: "previous",
         current: { games: 10, win_rate: 60, avg_accuracy: 82, blunders_per_game: 0.6 },
         previous: { games: 8, win_rate: 50, avg_accuracy: 78, blunders_per_game: 1.1 },
         deltas: { win_rate: 10, avg_accuracy: 4, blunders_per_game: -0.5, avg_acpl: -3 },
@@ -388,7 +402,7 @@ function renderApp(route = "/") {
 // test installed, so one `mockResolvedValue` would quietly follow the suite
 // around. Anything a test overrides has to be put back here.
 const DEFAULTS = new Map(
-  ["gamesPage", "settings", "health", "insights", "game"].map((name) => [
+  ["gamesPage", "settings", "health", "insights", "game", "evaluate"].map((name) => [
     name,
     api[name].getMockImplementation(),
   ]),
@@ -558,9 +572,50 @@ describe("the home screen", () => {
     expect(screen.getByRole("link", { name: "Tout l’historique" })).toBeDefined();
   });
 
+  // The window and the baseline are the two settings the tiles depend on, and
+  // both have to reach the data layer: a control that changes nothing but its
+  // own highlight is worse than no control.
+  it("asks again when the window changes", async () => {
+    renderApp("/");
+    await screen.findByText("Vue d’ensemble");
+
+    fireEvent.click(screen.getByRole("button", { name: "30 jours" }));
+    await waitFor(() =>
+      expect(api.insights).toHaveBeenCalledWith({
+        kind: "rated",
+        comparison: { days: 30, baseline: "previous" },
+      }),
+    );
+  });
+
+  it("asks again when the comparison moves to the whole archive", async () => {
+    renderApp("/");
+    await screen.findByText("Vue d’ensemble");
+
+    fireEvent.click(screen.getByRole("button", { name: "Historique" }));
+    await waitFor(() =>
+      expect(api.insights).toHaveBeenCalledWith({
+        kind: "rated",
+        comparison: { days: 7, baseline: "all" },
+      }),
+    );
+  });
+
+  it("says what the arrows are measured against", async () => {
+    renderApp("/");
+    expect(
+      await screen.findByText(/Les flèches comparent ces 30 jours aux 30 précédents/),
+    ).toBeDefined();
+  });
+
   it("reads rated games only, like every other statistic", async () => {
     renderApp("/");
-    await waitFor(() => expect(api.insights).toHaveBeenCalledWith({ kind: "rated" }));
+    await waitFor(() =>
+      expect(api.insights).toHaveBeenCalledWith({
+        kind: "rated",
+        comparison: { days: 7, baseline: "previous" },
+      }),
+    );
     expect(api.mistakes).toHaveBeenCalledWith("rated");
     expect(api.smoothedTrends).toHaveBeenCalledWith(3, 30, "rated");
   });
@@ -848,14 +903,32 @@ describe("explaining a move with the engine's own line", () => {
 describe("playing the position out", () => {
   // The analysis says what should have been played. This is the question that
   // follows it and that a move list cannot answer.
-  it("hands the board over and plays the engine's reply", async () => {
+  it("hands the board over without spending a search on arrival", async () => {
     const base = await api.game();
     api.game.mockResolvedValue({ ...base, pgn: "1. d4 d5 *" });
     renderApp("/games/1");
 
     fireEvent.click(await screen.findByRole("button", { name: /Jouer d’ici/ }));
     expect(await screen.findByRole("button", { name: "Revenir à l’analyse" })).toBeDefined();
+    // The starting position is White's, and the user has White here: there is
+    // nothing for the engine to do until they move.
     expect(api.evaluate).not.toHaveBeenCalled();
+  });
+
+  // The bug behind "I tried it and it does nothing": the board on the analysis
+  // screen shows the position *after* the move being looked at, so more often
+  // than not the side to move is the opponent's. The engine was only ever
+  // asked in reply to a move the user was not allowed to make, and the rally
+  // sat there for good.
+  it("opens the rally itself when the position is not yours to play", async () => {
+    const base = await api.game();
+    api.game.mockResolvedValue({ ...base, user_color: "black", pgn: "1. d4 d5 *" });
+    api.evaluate.mockResolvedValue({ cp: 15, mate: null, best_uci: "d2d4", depth: 12 });
+    renderApp("/games/1");
+
+    fireEvent.click(await screen.findByRole("button", { name: /Jouer d’ici/ }));
+    await waitFor(() => expect(api.evaluate).toHaveBeenCalled());
+    expect(await screen.findByText(/À vous de jouer/)).toBeDefined();
   });
 
   // Stockfish has one search state and the driver serialises every call, so a

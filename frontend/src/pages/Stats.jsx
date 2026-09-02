@@ -139,6 +139,20 @@ function SimpleTable({ rows, head, cells, empty = 'Pas assez de données.' }) {
   )
 }
 
+/**
+ * The opponent-rating panel's rows, in the order the eye wants them.
+ *
+ * Empty buckets are dropped rather than shown as zeros: a player with no draws
+ * does not need a line telling them so, and "—" three times reads as a broken
+ * panel rather than as an honest absence.
+ */
+function opponentRows(strength) {
+  const label = { win: 'Victoires', draw: 'Nulles', loss: 'Défaites' }
+  return ['win', 'draw', 'loss']
+    .map((key) => ({ key, name: label[key], ...(strength?.by_result?.[key] ?? {}) }))
+    .filter((row) => row.games > 0)
+}
+
 function BreakdownTable({ rows }) {
   if (!rows?.length) return <p className="px-4 py-4 text-body text-faint">Pas de données.</p>
   return (
@@ -551,6 +565,36 @@ export default function Stats() {
           hint="Perdez-vous contre des joueurs que vous devriez battre ?"
         >
           <BreakdownTable rows={insights?.by_rating_gap} />
+        </Panel>
+
+        {/* The same question in one line rather than five bands: the average
+            opponent you beat against the average opponent who beats you. The
+            distance between the two is the number that says whether you are
+            being paired above the level you convert at. */}
+        <Panel
+          title="Classement de vos adversaires"
+          hint="Le Elo moyen de vos adversaires, selon l’issue de la partie."
+        >
+          <SimpleTable
+            rows={opponentRows(insights?.opponent_strength)}
+            head={['Issue', 'Parties', 'Elo adverse', 'Écart moyen']}
+            cells={(row) => [
+              row.name,
+              row.games,
+              row.avg_opponent_rating ?? '—',
+              row.avg_gap == null ? '—' : `${row.avg_gap > 0 ? '+' : ''}${row.avg_gap}`,
+            ]}
+            empty="Aucune partie avec les deux classements renseignés."
+          />
+          {insights?.opponent_strength?.win_loss_gap != null && (
+            <p className="border-t border-line px-4 py-3 text-body leading-snug text-muted">
+              {insights.opponent_strength.win_loss_gap > 0
+                ? `Vos défaites viennent d’adversaires classés ${insights.opponent_strength.win_loss_gap} points au-dessus de ceux que vous battez.`
+                : insights.opponent_strength.win_loss_gap < 0
+                  ? `Vos défaites viennent d’adversaires classés ${Math.abs(insights.opponent_strength.win_loss_gap)} points en dessous de ceux que vous battez : ce ne sont pas les plus forts qui vous coûtent des parties.`
+                  : 'Vous gagnez et perdez contre le même niveau d’adversaire.'}
+            </p>
+          )}
         </Panel>
 
         <Panel title="Par cadence">

@@ -21,6 +21,7 @@ import {
   costlyMistakes,
   moveTimes,
   openingExit,
+  opponentStrength,
   periodComparison,
   pieceOf,
   sessionTilt,
@@ -454,6 +455,79 @@ describe("periodComparison", () => {
 
   it("says nothing when there are no games", () => {
     expect(periodComparison([])).toBe(null);
+  });
+
+  // The other baseline: everything older than the window, not just the window
+  // before it. Seven days against seven days is a sample where one evening is
+  // the whole delta; seven days against the archive is not.
+  it("compares against the whole archive when asked to", () => {
+    const games = [
+      played(1, 0, "win"),
+      played(2, 2, "win"),
+      played(3, 20, "loss"),
+      played(4, 200, "loss"),
+    ];
+    const result = periodComparison(games, { days: 7, baseline: "all" });
+
+    expect(result.baseline).toBe("all");
+    expect(result.current.games).toBe(2);
+    // Both older games, including the one the previous window would have
+    // missed entirely.
+    expect(result.previous.games).toBe(2);
+    expect(result.deltas.win_rate).toBe(100);
+  });
+
+  it("keeps the two baselines apart on the same archive", () => {
+    const games = [played(1, 0, "win"), played(2, 20, "loss"), played(3, 200, "loss")];
+    expect(periodComparison(games, { days: 7 }).previous).toBe(null);
+    expect(periodComparison(games, { days: 7, baseline: "all" }).previous.games).toBe(2);
+  });
+});
+
+describe("opponentStrength", () => {
+  const versus = (id, result, opponent) =>
+    game({ id, result, opponent_rating: opponent, user_rating: 1200 });
+
+  it("separates the opponents you beat from the ones who beat you", () => {
+    const result = opponentStrength([
+      versus(1, "win", 1100),
+      versus(2, "win", 1140),
+      versus(3, "loss", 1300),
+      versus(4, "draw", 1200),
+    ]);
+
+    expect(result.games).toBe(4);
+    expect(result.by_result.win).toMatchObject({ games: 2, avg_opponent_rating: 1120 });
+    expect(result.by_result.loss).toMatchObject({ games: 1, avg_opponent_rating: 1300 });
+    expect(result.by_result.draw.games).toBe(1);
+    // The sentence the screen says: your losses come from 180 points higher
+    // than your wins.
+    expect(result.win_loss_gap).toBe(180);
+  });
+
+  it("signs the gap against the user, as everything else here does", () => {
+    const result = opponentStrength([versus(1, "win", 1100), versus(2, "loss", 1300)]);
+    expect(result.by_result.win.avg_gap).toBe(-100);
+    expect(result.by_result.loss.avg_gap).toBe(100);
+  });
+
+  // An unrated game has no rating on either side, and counting it as zero
+  // would drag every average on the panel toward it.
+  it("ignores a game with a rating missing", () => {
+    const result = opponentStrength([
+      versus(1, "win", 1100),
+      game({ id: 2, result: "loss", opponent_rating: null, user_rating: 1200 }),
+    ]);
+    expect(result.games).toBe(1);
+    expect(result.by_result.loss.games).toBe(0);
+    expect(result.win_loss_gap).toBe(null);
+  });
+
+  it("says nothing rather than zero with nothing to average", () => {
+    const result = opponentStrength([]);
+    expect(result.games).toBe(0);
+    expect(result.avg_opponent_rating).toBe(null);
+    expect(result.win_loss_gap).toBe(null);
   });
 });
 
