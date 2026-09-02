@@ -239,6 +239,14 @@ export default function Stats() {
     acpl,
   }))
 
+  // A point whose window holds too little play carries no rate at all, and a
+  // stacked area draws a missing value as zero — which is precisely the dip
+  // that made the series look like it "starts low and climbs". Dropped from
+  // the chart, counted in the line above it.
+  const rateKey = `blunders_${NORMALISE[normalise].key}`
+  const drawable = judgments.filter((point) => point[rateKey] !== null)
+  const thin = judgments.length - drawable.length
+
   const sum = (field) => judgments.reduce((n, point) => n + (point[field] ?? 0), 0)
   const windowBlunders = sum('blunders')
   const windowGames = sum('analysed')
@@ -410,9 +418,18 @@ export default function Stats() {
           />
           <span className="ml-auto text-label text-faint">{judgmentTotal}</span>
         </div>
+        {thin > 0 && (
+          <p className="px-4 pt-2 text-label leading-snug text-faint">
+            {thin} point{thin > 1 ? 's' : ''} sur {judgments.length} {thin > 1 ? 'sont' : 'est'}{' '}
+            masqué{thin > 1 ? 's' : ''} : trop peu de coups joués autour de{' '}
+            {thin > 1 ? 'ces dates' : 'cette date'} pour en tirer un taux. Une partie perdue en
+            douze coups donnerait « 16 gaffes pour 100 coups » et vaudrait, sur la courbe, autant
+            qu’une semaine entière.
+          </p>
+        )}
         <div className="h-64 p-3">
           <ResponsiveContainer width="100%" height="100%">
-            <AreaChart data={judgments} margin={{ top: 8, right: 12, bottom: 0, left: -20 }}>
+            <AreaChart data={drawable} margin={{ top: 8, right: 12, bottom: 0, left: -20 }}>
               <CartesianGrid stroke="var(--color-line-strong)" strokeDasharray="2 4" vertical={false} />
               <XAxis
                 dataKey="period"
@@ -427,7 +444,13 @@ export default function Stats() {
                   value == null ? '—' : `${value} ${NORMALISE[normalise].unit}`,
                   name,
                 ]}
-                labelFormatter={(key) => `${PERIOD_LABEL[period]} ${key}`}
+                // The sample travels with the point: a rate reads the same at
+                // 40 moves and at 600, and only one of them means anything.
+                labelFormatter={(key, payload) => {
+                  const point = payload?.[0]?.payload
+                  const moves = point?.sample_moves ?? point?.moves
+                  return `${PERIOD_LABEL[period]} ${key}${moves ? ` · ${moves} de vos coups` : ''}`
+                }}
                 contentStyle={TOOLTIP_STYLE}
               />
               <Legend

@@ -166,21 +166,23 @@ describe("computeJudgmentTrends", () => {
     },
   });
 
+  // Two games of 40 and 60 of the user's own moves: a hundred moves in the
+  // bucket, which is the sample a per-hundred rate needs to mean anything.
   const games = [
-    game(1, 10, "white", { inaccuracy: 2, mistake: 1, blunder: 1 }, 40),
-    game(2, 10, "black", { inaccuracy: 0, mistake: 2, blunder: 3 }, 60),
-    game(3, 11, "white", { inaccuracy: 1, mistake: 0, blunder: 0 }, 20),
+    game(1, 10, "white", { inaccuracy: 4, mistake: 2, blunder: 2 }, 80),
+    game(2, 10, "black", { inaccuracy: 0, mistake: 4, blunder: 6 }, 120),
+    game(3, 11, "white", { inaccuracy: 2, mistake: 0, blunder: 0 }, 60),
   ];
 
   it("sums each judgment per bucket", () => {
     const [first, second] = computeJudgmentTrends(games, { period: "day", limit: 10 });
     expect(first.period).toBe("2026-08-10");
     expect(first.games).toBe(2);
-    expect(first.blunders).toBe(4);
-    expect(first.mistakes).toBe(3);
-    expect(first.inaccuracies).toBe(2);
+    expect(first.blunders).toBe(8);
+    expect(first.mistakes).toBe(6);
+    expect(first.inaccuracies).toBe(4);
     expect(second.blunders).toBe(0);
-    expect(second.inaccuracies).toBe(1);
+    expect(second.inaccuracies).toBe(2);
   });
 
   it("divides per game by the analysed games, not by every game", () => {
@@ -188,15 +190,49 @@ describe("computeJudgmentTrends", () => {
     const [first] = computeJudgmentTrends(withUnanalysed, { period: "day", limit: 10 });
     expect(first.games).toBe(3);
     expect(first.analysed).toBe(2);
-    expect(first.blunders_per_game).toBe(2);
+    expect(first.blunders_per_game).toBe(4);
   });
 
-  // 20 + 30 = 50 of the user's own moves in that bucket, 4 blunders: 8 per 100.
+  // 40 + 60 = 100 of the user's own moves in that bucket, 8 blunders: 8 per 100.
   it("rates per hundred of the user's own moves", () => {
     const [first] = computeJudgmentTrends(games, { period: "day", limit: 10 });
-    expect(first.moves).toBe(50);
+    expect(first.moves).toBe(100);
     expect(first.blunders_per_100).toBe(8);
     expect(first.mistakes_per_100).toBe(6);
+  });
+
+  /**
+   * The bias the second bucket is here for.
+   *
+   * A game that ended by mate on move twelve ended that way because somebody
+   * blundered, so a bucket holding one of those and nothing else reports a
+   * blunder rate several times anyone's real one - and it is drawn at the same
+   * weight as a point built from six hundred moves. Under the floor the rate
+   * is not reported at all.
+   */
+  it("reports no rate at all from a sample too thin to carry one", () => {
+    const short = [
+      game(7, 12, "white", { inaccuracy: 0, mistake: 0, blunder: 1 }, 12),
+      game(8, 12, "white", { inaccuracy: 0, mistake: 0, blunder: 1 }, 14),
+    ];
+    const [only] = computeJudgmentTrends(short, { period: "day", limit: 10 });
+
+    expect(only.moves).toBe(13); // six moves, then seven
+    expect(only.blunders).toBe(2); // the count is still true and still reported
+    expect(only.blunders_per_100).toBe(null); // "15 gaffes pour 100 coups" is not
+    // Per game the denominator is the number of games, which is exactly what
+    // the label says, so that one survives.
+    expect(only.blunders_per_game).toBe(1);
+  });
+
+  it("reports the rate again as soon as the sample is there", () => {
+    const enough = [
+      game(7, 12, "white", { blunder: 1 }, 100),
+      game(8, 12, "white", { blunder: 1 }, 100),
+    ];
+    const [only] = computeJudgmentTrends(enough, { period: "day", limit: 10 });
+    expect(only.moves).toBe(100);
+    expect(only.blunders_per_100).toBe(2);
   });
 
   // The trap: counting a game's blunders while its moves are missing from the
@@ -207,8 +243,8 @@ describe("computeJudgmentTrends", () => {
       analysis: { judgment_counts: { white: { blunder: 5 } } },
     };
     const [first] = computeJudgmentTrends([...games, blind], { period: "day", limit: 10 });
-    expect(first.blunders).toBe(9); // still reported as a total
-    expect(first.moves).toBe(50); // its moves are not in the denominator
+    expect(first.blunders).toBe(13); // still reported as a total
+    expect(first.moves).toBe(100); // its moves are not in the denominator
     expect(first.blunders_per_100).toBe(8); // so its blunders are not in the numerator
   });
 
@@ -303,7 +339,10 @@ describe("computeSmoothedTrends", () => {
 
   it("smooths the judgment counts the same way", () => {
     const series = computeSmoothedTrends(
-      [on(10, { counts: { blunder: 4 }, plies: 40 }), on(11, { counts: { blunder: 0 }, plies: 40 })],
+      [
+        on(10, { counts: { blunder: 4 }, plies: 120 }),
+        on(11, { counts: { blunder: 0 }, plies: 120 }),
+      ],
       { radius: 1 },
     );
     // The raw totals keep the field names computeJudgmentTrends uses, so a
@@ -312,8 +351,43 @@ describe("computeSmoothedTrends", () => {
     expect(series[1].blunders).toBe(0);
     expect(series[0].raw_blunders_per_game).toBe(4);
     expect(series[0].blunders_per_game).toBe(2.67); // (2*4 + 0) / 3
-    // 20 of the user's own moves per game, weighted 2 and 1: 60 moves, 8 blunders.
-    expect(series[0].blunders_per_100).toBe(13.33);
+    // 60 of the user's own moves per game, weighted 2 and 1: 180 moves, 8 blunders.
+    expect(series[0].blunders_per_100).toBe(4.44);
+  });
+
+  /**
+   * The floor, on the series the home and statistics screens actually draw.
+   *
+   * A stacked area draws a missing value as zero, so a rate the data cannot
+   * support is not a harmless gap - it is a dip to the floor at the start of
+   * the archive, followed by a "climb" as soon as enough games arrive. Which
+   * is exactly what it looked like.
+   */
+  it("says nothing rather than a rate built from one short game", () => {
+    const series = computeSmoothedTrends([on(10, { counts: { blunder: 1 }, plies: 12 })], {
+      radius: 1,
+    });
+    const day = series.find((p) => p.period === "2026-08-10");
+
+    expect(day.sample_moves).toBe(6);
+    expect(day.blunders_per_100).toBe(null);
+    expect(day.blunders).toBe(1);
+  });
+
+  // The window's real size, counted rather than weighted: a single game on the
+  // centre day arrives in the weighted totals as four of itself, which is
+  // right for the ratio and useless for judging what is behind it.
+  it("carries how much play each point rests on", () => {
+    const series = computeSmoothedTrends(
+      [on(10, { plies: 100 }), on(11, { plies: 100 }), on(11, { plies: 100 })],
+      { radius: 1 },
+    );
+    const eleventh = series.find((p) => p.period === "2026-08-11");
+
+    expect(eleventh.sample_games).toBe(3);
+    expect(eleventh.sample_analysed).toBe(3);
+    expect(eleventh.sample_moves).toBe(150);
+    expect(eleventh.window_games).toBeGreaterThan(eleventh.sample_games); // weighted
   });
 
   it("smooths across the edge of the window rather than at it", () => {

@@ -234,6 +234,35 @@ export function myMoveCount(game) {
 }
 
 /**
+ * How thin a sample is allowed to get before a rate stops being reported.
+ *
+ * A rate per hundred moves computed over twenty moves is not a small number
+ * with a wide error bar - it is one game's story printed in the units of a
+ * trend, and it lands on the chart looking exactly like a point built from six
+ * hundred moves. The two failures it produces are both real:
+ *
+ *   - a short game is *conditioned* on the mistake. A game that ended by mate
+ *     on move twelve ended that way because somebody blundered, so a window
+ *     holding one of those and nothing else reports a blunder rate three or
+ *     four times anyone's real one;
+ *   - a day with no games near it reports nothing at all, and a chart drawing
+ *     nothing as zero opens the series at the floor before it "climbs".
+ *
+ * So below these, the rate is `null` rather than a number, and the window's
+ * own size travels beside it so a screen can say why.
+ *
+ * Eighty of the player's own moves is about two and a half blitz games, which
+ * is where a per-hundred rate stops moving by whole points on one blunder.
+ *
+ * Only the per-hundred rate is held to it. The per-game series has the same
+ * noise and not the same lie: its denominator is the number of games, which is
+ * exactly what its label says, so "3 gaffes par partie" over one game is a
+ * true statement about a bad evening rather than a rate computed from six
+ * moves and drawn like a trend.
+ */
+export const MIN_RATE_MOVES = 80;
+
+/**
  * Blunders, mistakes and inaccuracies over time - the thing that decides games
  * at club level, and the one series `computeTrends` cannot carry.
  *
@@ -271,7 +300,7 @@ export function computeJudgmentTrends(games, { period = "week", limit = 12 } = {
     }
 
     const perGame = (n) => (analysed ? roundTo(n / analysed, 2) : null);
-    const per100 = (n) => (moves ? roundTo((100 * n) / moves, 2) : null);
+    const per100 = (n) => (moves >= MIN_RATE_MOVES ? roundTo((100 * n) / moves, 2) : null);
 
     return {
       period: key,
@@ -416,6 +445,12 @@ export function computeSmoothedTrends(games, { radius = 3, limit = 60 } = {}) {
 
   const series = ordered.map((day, index) => {
     const totals = blankDay(day.period);
+    // The same window, unweighted. The weights cancel inside a ratio, so they
+    // are right for the value and useless for judging whether there is enough
+    // behind it: a single game on the centre day arrives in `totals` as four.
+    // How much play a point actually rests on has to be counted, not weighted.
+    const sample = { games: 0, analysed: 0, moves: 0 };
+
     for (const { offset, weight } of weights) {
       const neighbour = ordered[index + offset];
       if (!neighbour) continue;
@@ -423,16 +458,31 @@ export function computeSmoothedTrends(games, { radius = 3, limit = 60 } = {}) {
         if (field === "period") continue;
         totals[field] += neighbour[field] * weight;
       }
+      sample.games += neighbour.games;
+      sample.analysed += neighbour.analysed;
+      sample.moves += neighbour.moves;
     }
 
     const ratio = (numerator, denominator, digits) =>
       denominator ? roundTo(numerator / denominator, digits) : null;
+
+    // Thin windows report nothing rather than a number the chart cannot draw
+    // honestly - see MIN_RATE_MOVES.
+    const perGame = (numerator) => ratio(numerator, totals.analysed, 2);
+    const per100 = (numerator) =>
+      sample.moves >= MIN_RATE_MOVES ? ratio(100 * numerator, totals.moves, 2) : null;
 
     return {
       period: day.period,
       games: day.games,
       analysed: day.analysed,
       window_games: totals.games,
+      // What the smoothed values above actually rest on, counted rather than
+      // weighted, so a screen can say "trois parties" instead of implying the
+      // point is as solid as the one next to it.
+      sample_games: sample.games,
+      sample_analysed: sample.analysed,
+      sample_moves: sample.moves,
 
       // That day's own totals, under the names `computeJudgmentTrends` uses,
       // so a caller can sum a window the same way whichever series it holds.
@@ -448,13 +498,13 @@ export function computeSmoothedTrends(games, { radius = 3, limit = 60 } = {}) {
       avg_accuracy: ratio(totals.accuracy_sum, totals.accuracy_n, 1),
       avg_acpl: ratio(totals.acpl_sum, totals.acpl_n, 1),
 
-      blunders_per_game: ratio(totals.blunders, totals.analysed, 2),
-      mistakes_per_game: ratio(totals.mistakes, totals.analysed, 2),
-      inaccuracies_per_game: ratio(totals.inaccuracies, totals.analysed, 2),
+      blunders_per_game: perGame(totals.blunders),
+      mistakes_per_game: perGame(totals.mistakes),
+      inaccuracies_per_game: perGame(totals.inaccuracies),
 
-      blunders_per_100: ratio(100 * totals.counted_blunders, totals.moves, 2),
-      mistakes_per_100: ratio(100 * totals.counted_mistakes, totals.moves, 2),
-      inaccuracies_per_100: ratio(100 * totals.counted_inaccuracies, totals.moves, 2),
+      blunders_per_100: per100(totals.counted_blunders),
+      mistakes_per_100: per100(totals.counted_mistakes),
+      inaccuracies_per_100: per100(totals.counted_inaccuracies),
     };
   });
 

@@ -18,6 +18,7 @@ import golden from "../../data/__fixtures__/golden-data.json";
 import { normalizeGame } from "../../data/chessCom.js";
 import { createRepository, migrate, nodeDriver } from "../../data/db.js";
 import { createGameStore } from "../../data/games.js";
+import { MIN_RATE_MOVES } from "../../data/stats.js";
 import { createSync, SETTING_USERNAME } from "../../data/sync.js";
 import { ApiError, createApi } from "../api.js";
 
@@ -326,8 +327,11 @@ describe("stats", () => {
     expect(analysed.length).toBeGreaterThan(0);
     for (const point of analysed) {
       expect(point.moves).toBeGreaterThan(0);
-      expect(point.blunders_per_100).not.toBe(null);
       expect(point.blunders_per_game).not.toBe(null);
+      // Null below the floor is deliberate and null above it is the silent
+      // failure this test exists to catch, so the assertion follows the
+      // sample rather than asserting one of the two everywhere.
+      expect(point.blunders_per_100 === null).toBe(point.moves < MIN_RATE_MOVES);
     }
   });
 });

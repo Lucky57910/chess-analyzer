@@ -117,6 +117,16 @@ emitted as *deltas* — once, on the move that caused them — with an absolute
 snapshot at the head of each chunk; repeating a fact on twenty lines gets it
 written about twenty times.
 
+**A rate needs a denominator big enough to be one.** `MIN_RATE_MOVES` in
+`stats.js` withholds the per-hundred-moves judgment rates below eighty of the
+player's own moves in the window, and the smoothed series carries `sample_*`
+(counted, not weighted) so a screen can say why. Two reasons, both real: a
+short game is *conditioned* on the blunder that ended it, so a window holding
+one reports three times anyone's true rate; and a stacked area draws a missing
+value as zero, so a rate the data cannot support opened the chart at the floor
+and then "climbed". The per-game series keeps no floor — its denominator is
+games, which is exactly what its label says.
+
 **`title` attributes are not a way to say anything.** The app ships as an APK,
 where nothing hovers, so every explanation that lived in a `title` was written
 and never displayed. Use `components/ui/Info.jsx` instead.
