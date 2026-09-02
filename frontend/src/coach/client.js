@@ -227,10 +227,13 @@ export function createCoach(http, { sleep, now } = {}) {
     /**
      * Comment one whole game.
      *
-     * @returns {Promise<{notes: Record<number,string>, failed: number}>}
+     * @returns {Promise<{notes: Record<number,string>, failed: number,
+     *   providers: Record<string, number>}>}
      *   `notes` is keyed by ply. `failed` counts the chunks that did not come
      *   back — a partial commentary is still worth storing, and saying how
-     *   partial it is beats pretending it is complete.
+     *   partial it is beats pretending it is complete. `providers` counts the
+     *   chunks each provider answered, so a screen can say what was spent
+     *   where rather than only that something was.
      */
     async commentGame({ game, analysis, config, onProgress, onWait, onFallback }) {
       if (!config?.apiKey) throw new CoachError("Aucune clé API renseignée.");
@@ -258,13 +261,16 @@ export function createCoach(http, { sleep, now } = {}) {
       );
 
       const notes = {};
-      const used = new Set();
+      // Counted, not just listed: one of these providers may be billed by the
+      // token, and "some of this was written by Claude" is a different thing
+      // to be told than "three of the four chunks were".
+      const used = {};
       let failed = 0;
 
       for (const [index, { plies, text }] of chunks.entries()) {
         try {
           const { answer, provider } = await send({ chain, user: text, limiters, onWait, onFallback });
-          used.add(provider);
+          used[provider] = (used[provider] ?? 0) + 1;
           Object.assign(notes, validate(extractJson(answer), plies));
         } catch (error) {
           // One refused chunk must not cost the moves an earlier one already
@@ -276,7 +282,7 @@ export function createCoach(http, { sleep, now } = {}) {
         onProgress?.(index + 1, chunks.length);
       }
 
-      return { notes, failed, providers: [...used] };
+      return { notes, failed, providers: used };
     },
   };
 

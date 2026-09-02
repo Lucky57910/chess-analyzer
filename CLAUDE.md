@@ -101,6 +101,14 @@ games in ten and commenting ten. `PROVIDERS.anthropic` is the paid spare; its
 `pricing` is what `cost.js` turns into the figure per game shown in Réglages,
 so a model is chosen against a number rather than against a rate card.
 
+**Storing a key and choosing who is asked first are different actions.**
+`writeCoachConfig` takes `keyProvider` (file this key and model under that
+provider, change nothing else) and `provider` (make this the one asked first).
+One selector did both, which meant that picking Claude to paste its key moved
+every game onto a paid provider — the opposite of why a spare key exists. The
+chain restarts at the primary for every chunk, so a paid spare is billed for
+the chunks the free tier actually refused and no others.
+
 **A re-analysis keeps the commentary it is still describing.** `saveAnalysis`
 carries across every note whose ply came back with the same judgment and the
 same `best_move_san`, and drops the rest (`keptCommentary`). Clearing all of it

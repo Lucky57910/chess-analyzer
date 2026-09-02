@@ -1213,7 +1213,7 @@ describe("the coach", () => {
     );
   });
 
-  it("sends the provider and model, and the key only when one was typed", async () => {
+  it("files the key under the provider on screen, and the key only when one was typed", async () => {
     renderApp("/settings");
     const field = await screen.findByPlaceholderText(/Collez votre clé/);
     fireEvent.change(field, { target: { value: "AIza-test" } });
@@ -1221,7 +1221,41 @@ describe("the coach", () => {
 
     await waitFor(() =>
       expect(api.updateSettings).toHaveBeenCalledWith({
-        coach: { provider: "gemini", model: "gemini-3.7-flash", apiKey: "AIza-test" },
+        coach: { keyProvider: "gemini", model: "gemini-3.7-flash", apiKey: "AIza-test" },
+      }),
+    );
+  });
+
+  /**
+   * The trap this separation exists for.
+   *
+   * Selecting Claude to paste its key used to make Claude the provider asked
+   * first, which is a paid request for every game from then on - the opposite
+   * of why a second key is stored at all. Saving a key now says nothing about
+   * who is asked first.
+   */
+  it("does not move the coach onto a paid provider just for storing its key", async () => {
+    renderApp("/settings");
+    fireEvent.click(await screen.findByRole("button", { name: "Claude" }));
+    fireEvent.change(screen.getByPlaceholderText(/Collez votre clé/), {
+      target: { value: "sk-ant-test" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Enregistrer" })[1]);
+
+    await waitFor(() => expect(api.updateSettings).toHaveBeenCalled());
+    const [{ coach }] = api.updateSettings.mock.calls.at(-1);
+    expect(coach.keyProvider).toBe("anthropic");
+    expect(coach.provider).toBe(undefined);
+  });
+
+  it("moves it only when asked to, in as many words", async () => {
+    renderApp("/settings");
+    fireEvent.click(await screen.findByRole("button", { name: "Claude" }));
+    fireEvent.click(screen.getByRole("button", { name: /Interroger Claude en premier/ }));
+
+    await waitFor(() =>
+      expect(api.updateSettings).toHaveBeenCalledWith({
+        coach: { provider: "anthropic", model: "claude-opus-5" },
       }),
     );
   });

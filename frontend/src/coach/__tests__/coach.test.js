@@ -783,7 +783,7 @@ describe("falling back to another provider", () => {
     expect(calls[3].url).toContain("api.anthropic.com");
     expect(calls[3].headers["x-api-key"]).toBe("a-key");
     expect(result.notes[1]).toBe("Commenté ailleurs.");
-    expect(result.providers).toEqual(["anthropic"]);
+    expect(result.providers).toEqual({ anthropic: 1 });
     // Said once on screen: a quota spent somewhere else must not be spent
     // silently.
     expect(spares).toEqual(["Claude"]);

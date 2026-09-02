@@ -22,19 +22,26 @@ const inputClass =
  * this page should not be a leak.
  */
 function CoachSettings({ config, onSave, busy }) {
+  // Which provider is being *looked at*, not which one is used. They were the
+  // same control, which meant that selecting Claude to paste its key moved
+  // every game onto a paid provider - the opposite of why a second key is
+  // stored at all.
   const [provider, setProvider] = useState(config?.provider ?? 'gemini')
-  const [model, setModel] = useState(config?.model ?? '')
+  const [model, setModel] = useState(null)
   const [key, setKey] = useState('')
   const adapter = PROVIDERS[provider] ?? PROVIDERS.gemini
-  const chosen = model || adapter.models[0]
+  // The stored model for the provider on screen, until this session picks one.
+  const chosen = model ?? config?.models?.[provider] ?? adapter.models[0]
+  const primary = config?.provider ?? 'gemini'
+  const isPrimary = provider === primary
 
-  // Picking a provider resets the model, because a model name belongs to one
-  // provider and the stored one is cleared on the same event. The key is not
-  // reset with it: one is stored per provider, which is what lets a second one
-  // stand in when the first will not answer.
+  // A model name belongs to one provider, so the selection resets with the
+  // provider. The key does not: one is stored per provider, which is what
+  // lets a second one stand in when the first will not answer.
   function pickProvider(next) {
     setProvider(next)
-    setModel(PROVIDERS[next].models[0])
+    setModel(null)
+    setKey('')
   }
 
   const stored = config?.keys ?? {}
@@ -50,11 +57,16 @@ function CoachSettings({ config, onSave, busy }) {
       bodyClass="flex flex-col gap-4 p-4"
     >
       <div className="flex flex-col gap-1.5">
-        <span className="text-label text-faint">Fournisseur</span>
+        <span className="text-label text-faint">
+          Fournisseur · {PROVIDERS[primary].label} est interrogé en premier
+        </span>
         <Segmented
-          label="Fournisseur du coach"
+          label="Fournisseur à régler"
           value={provider}
-          options={Object.values(PROVIDERS).map((p) => ({ key: p.key, label: p.label }))}
+          options={Object.values(PROVIDERS).map((p) => ({
+            key: p.key,
+            label: p.key === primary ? `${p.label} ★` : p.label,
+          }))}
           onChange={pickProvider}
           className="self-start"
         />
@@ -115,19 +127,33 @@ function CoachSettings({ config, onSave, busy }) {
           variant="primary"
           disabled={busy}
           onClick={() => {
-            // An untouched field means "leave the stored key alone", which is
-            // why it is `undefined` rather than the empty string here.
-            onSave({ provider, model: chosen, ...(key ? { apiKey: key } : {}) })
+            // `keyProvider`, not `provider`: saving a key files it under the
+            // provider on screen and leaves the order alone. An untouched
+            // field means "leave the stored key alone", which is why it is
+            // `undefined` rather than the empty string.
+            onSave({ keyProvider: provider, model: chosen, ...(key ? { apiKey: key } : {}) })
             setKey('')
           }}
         >
           Enregistrer
         </Button>
+        {/* Making a provider the one asked first is its own decision, and on a
+            paid key it is a decision about money. It is never a side effect of
+            storing a key. */}
+        {!isPrimary && (
+          <Button
+            variant="secondary"
+            disabled={busy}
+            onClick={() => onSave({ provider, model: chosen })}
+          >
+            Interroger {adapter.label} en premier
+          </Button>
+        )}
         {stored[provider] && (
           <Button
             variant="danger"
             disabled={busy}
-            onClick={() => onSave({ provider, model: chosen, apiKey: '' })}
+            onClick={() => onSave({ keyProvider: provider, apiKey: '' })}
           >
             Oublier la clé {adapter.label}
           </Button>
@@ -152,10 +178,11 @@ function CoachSettings({ config, onSave, busy }) {
         </div>
         <p className="text-label leading-relaxed text-faint">
           {spares.length
-            ? `Si ${PROVIDERS[config.provider].label} refuse — quota, serveur surchargé, réseau — la
-               demande repart chez ${spares.map((name) => PROVIDERS[name].label).join(', ')}. Le
-               commentaire est le même : ils reçoivent les mêmes faits.`
-            : 'Enregistrez une clé chez un second fournisseur pour qu’il prenne le relais quand le premier refuse. Les clés sont conservées séparément : changer de fournisseur ici n’efface pas l’autre.'}
+            ? `Si ${PROVIDERS[primary].label} refuse — quota, serveur surchargé, réseau — la
+               demande repart chez ${spares.map((name) => PROVIDERS[name].label).join(', ')}, et
+               seulement dans ce cas : chaque lot recommence par ${PROVIDERS[primary].label}. Le
+               commentaire est le même, ils reçoivent les mêmes faits.`
+            : 'Enregistrez une clé chez un second fournisseur pour qu’il prenne le relais quand le premier refuse. Les clés sont conservées séparément : régler un autre fournisseur ici n’efface pas la première et ne change pas qui est interrogé en premier.'}
         </p>
       </div>
 

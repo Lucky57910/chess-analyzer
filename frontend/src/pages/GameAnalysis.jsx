@@ -13,6 +13,7 @@ import Button from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import Segmented from '../components/ui/Segmented'
 import { narrate } from '../coach/narrate.js'
+import { PROVIDERS } from '../coach/providers.js'
 import { useSettings } from '../hooks/useSettings'
 import { useMediaQuery } from '../hooks/useMediaQuery'
 import { useQueue } from '../hooks/useQueue'
@@ -43,6 +44,23 @@ const RESULT_TONE = { win: 'good', loss: 'bad', draw: 'neutral' }
 
 /** "1 coup commenté", "7 coups commentés". */
 const plural = (n, one, many) => `${n} ${n > 1 ? many : one}`
+
+/**
+ * What a run cost somewhere that charges, or nothing at all.
+ *
+ * The free tier is the default and the paid one only ever stands in for it, so
+ * the ordinary run says nothing. When it did stand in, saying so with the
+ * count is the difference between a bill and a surprise.
+ */
+function paidWork(providers) {
+  const billed = Object.entries(providers ?? {}).filter(
+    ([key, chunks]) => chunks > 0 && PROVIDERS[key] && !PROVIDERS[key].free,
+  )
+  if (!billed.length) return null
+  return billed
+    .map(([key, chunks]) => `${plural(chunks, 'lot rédigé', 'lots rédigés')} par ${PROVIDERS[key].label} (payant)`)
+    .join(', ')
+}
 
 /** The two lists beside the board, as one panel with two tabs. */
 const TABS = [
@@ -313,10 +331,15 @@ export default function GameAnalysis() {
       // line saying "2" reads as the coverage rather than as the delta.
       const total = Object.keys(result.notes).length
       setCoachStatus(
-        result.failed
-          ? `${plural(total, 'coup commenté', 'coups commentés')} sur la partie, ` +
-            `${result.failed} lot(s) en échec.`
-          : `${plural(total, 'coup commenté', 'coups commentés')} sur la partie.`,
+        [
+          `${plural(total, 'coup commenté', 'coups commentés')} sur la partie`,
+          result.failed ? `${result.failed} lot(s) en échec` : null,
+          // A paid provider that stood in for the free one has to be named
+          // with the count, because that is the part that costs money.
+          paidWork(result.providers),
+        ]
+          .filter(Boolean)
+          .join(', ') + '.',
       )
     } catch (err) {
       setCoachStatus(err.message)
