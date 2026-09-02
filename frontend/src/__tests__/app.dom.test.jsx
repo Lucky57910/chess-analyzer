@@ -40,7 +40,13 @@ vi.mock("../utils/api", () => {
       chess_com_username: "maxime",
       last_synced_at: "2026-08-26T10:00:00.000Z",
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: false },
+      coach: {
+        provider: "gemini",
+        model: "gemini-3.7-flash",
+        key_set: false,
+        fallback: true,
+        keys: { gemini: false, openrouter: false, anthropic: false },
+      },
     })),
     updateSettings: vi.fn(async (patch) => ({
       chess_com_username: patch.chess_com_username?.trim() ?? "maxime",
@@ -50,6 +56,13 @@ vi.mock("../utils/api", () => {
         provider: patch.coach?.provider ?? "gemini",
         model: patch.coach?.model ?? "gemini-3.7-flash",
         key_set: patch.coach?.apiKey ? true : false,
+        fallback: patch.coach?.fallback ?? true,
+        keys: {
+          gemini: false,
+          openrouter: false,
+          anthropic: false,
+          [patch.coach?.provider ?? "gemini"]: Boolean(patch.coach?.apiKey),
+        },
       },
     })),
     coachGame: vi.fn(async () => ({
@@ -1009,7 +1022,13 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
+      coach: {
+        provider: "gemini",
+        model: "gemini-3.7-flash",
+        key_set: true,
+        fallback: true,
+        keys: { gemini: true, openrouter: false, anthropic: false },
+      },
     });
     renderApp("/games/1");
     expect(await screen.findByRole("button", { name: /Faire commenter par le coach/ })).toBeDefined();
@@ -1020,7 +1039,13 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
+      coach: {
+        provider: "gemini",
+        model: "gemini-3.7-flash",
+        key_set: true,
+        fallback: true,
+        keys: { gemini: true, openrouter: false, anthropic: false },
+      },
     });
     renderApp("/games/1");
     fireEvent.click(await screen.findByRole("button", { name: /Faire commenter par le coach/ }));
@@ -1040,7 +1065,13 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
+      coach: {
+        provider: "gemini",
+        model: "gemini-3.7-flash",
+        key_set: true,
+        fallback: true,
+        keys: { gemini: true, openrouter: false, anthropic: false },
+      },
     });
     renderApp("/games/1");
     fireEvent.click(await screen.findByRole("button", { name: /Faire commenter par le coach/ }));
@@ -1059,7 +1090,13 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
+      coach: {
+        provider: "gemini",
+        model: "gemini-3.7-flash",
+        key_set: true,
+        fallback: true,
+        keys: { gemini: true, openrouter: false, anthropic: false },
+      },
     });
     renderApp("/games/1");
     fireEvent.click(await screen.findByRole("button", { name: /Faire commenter par le coach/ }));
@@ -1082,7 +1119,13 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
+      coach: {
+        provider: "gemini",
+        model: "gemini-3.7-flash",
+        key_set: true,
+        fallback: true,
+        keys: { gemini: true, openrouter: false, anthropic: false },
+      },
     });
     // Two notes already stored, one added by this run: the status line has to
     // say three, because three is what the reader can now see on the board.
@@ -1101,7 +1144,13 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
+      coach: {
+        provider: "gemini",
+        model: "gemini-3.7-flash",
+        key_set: true,
+        fallback: true,
+        keys: { gemini: true, openrouter: false, anthropic: false },
+      },
     });
     api.coachGame.mockRejectedValueOnce(new Error("Quota du modèle atteint."));
     renderApp("/games/1");
@@ -1116,13 +1165,52 @@ describe("the coach", () => {
       chess_com_username: "maxime",
       last_synced_at: null,
       engine_depth: 18,
-      coach: { provider: "gemini", model: "gemini-3.7-flash", key_set: true },
+      coach: {
+        provider: "gemini",
+        model: "gemini-3.7-flash",
+        key_set: true,
+        fallback: true,
+        keys: { gemini: true, openrouter: false, anthropic: false },
+      },
     });
     renderApp("/settings");
     expect(await screen.findByText(/une clé est enregistrée/)).toBeDefined();
     const field = document.querySelector('input[type="password"]');
     expect(field.value).toBe("");
     expect(screen.getByRole("button", { name: /Oublier la clé/ })).toBeDefined();
+  });
+
+  // "Combien ça me couterait" is not answerable from "$25 per million output
+  // tokens", and the screen is the only place the question gets asked.
+  it("prices a commented game before the key is bought", async () => {
+    renderApp("/settings");
+    fireEvent.click(await screen.findByRole("button", { name: "Claude" }));
+    expect(await screen.findByText(/par partie commentée/)).toBeDefined();
+  });
+
+  it("offers the spare provider once a second key exists", async () => {
+    api.settings.mockResolvedValue({
+      chess_com_username: "maxime",
+      last_synced_at: null,
+      engine_depth: 18,
+      coach: {
+        provider: "gemini",
+        model: "gemini-3.7-flash",
+        key_set: true,
+        fallback: true,
+        keys: { gemini: true, openrouter: false, anthropic: true },
+      },
+    });
+    renderApp("/settings");
+    expect(await screen.findByText(/la demande repart chez Claude/)).toBeDefined();
+  });
+
+  it("saves the fallback switch without touching the key", async () => {
+    renderApp("/settings");
+    fireEvent.click(await screen.findByRole("button", { name: "Désactivé" }));
+    await waitFor(() =>
+      expect(api.updateSettings).toHaveBeenCalledWith({ coach: { fallback: false } }),
+    );
   });
 
   it("sends the provider and model, and the key only when one was typed", async () => {

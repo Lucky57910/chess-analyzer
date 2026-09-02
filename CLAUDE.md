@@ -34,8 +34,9 @@ together, so verifying a native change means pushing and reading the run.
 | `src/coach/narrate.js` | Ranks and words what to say about one move. All the French for a motif lives here. |
 | `src/coach/digest.js` | The facts a language model is allowed to see. Never the PGN. |
 | `src/coach/position.js` | Material, king safety, pawn structure, development, repeated opening moves. |
-| `src/coach/providers.js` `client.js` `config.js` | Provider adapters, the request/validation loop, and where the key lives. |
+| `src/coach/providers.js` `client.js` `config.js` | Provider adapters, the request/validation/fallback loop, and where the keys live — one per provider. |
 | `src/coach/throttle.js` | Sliding-window rate limiter and `Retry-After` backoff for the free tier. |
+| `src/coach/cost.js` | What a commented game costs on a paid provider, measured from what the digest actually sends. |
 | `src/components/ui/` | Button, Card/Panel, Segmented, Badge, and the ⓘ that replaced every `title`. |
 | `src/components/Icon.jsx` | The icon set, inline. Replaced the emoji that Android drew differently on every device. |
 | `src/utils/api.js` | Facade the pages call. Keeps the shape the old HTTP client had. |
@@ -52,6 +53,15 @@ The engine is executed, not linked, and since API 29 an app may only exec from
 different key; working around it means uninstalling, which destroys the local
 database — the only copy of the analyses. The keystore is in the repository
 secrets and is never regenerated.
+
+**`analysis_status = 'running'` means "interrupted", not "in progress".** The
+queue only runs in the foreground and there is exactly one runner, so a row
+still marked running when a pass starts belongs to a pass that died with the
+process. `store.reclaimRunning()` hands those back — once when the app opens
+and again at the top of every run — keeping the attempt already charged, and
+retiring with a reason anything that has spent all three. Without it a game
+killed mid-analysis showed "en analyse" for ever, because `nextPending` only
+looks at `pending`.
 
 **The engine binary is not committed.** 80 MB, fetched by `engine:fetch` and
 pinned to a SHA-256. Gradle fails with an explanation if it is missing.
@@ -79,6 +89,24 @@ minute is not the binding constraint at the volume one person produces, and
 `throttle.js` exists for the burst that would cross it rather than to pace the
 normal case. Note that Google's **free tier trains on what it is sent**; the
 digest carries the user's games, and the settings screen says so.
+
+**A free tier's failures are the moment, not the request.** A 429, a 5xx and a
+request that never arrived are all retried, and then handed to the next
+provider a key is stored for — which is why keys are stored *per provider*
+(`coach_api_key_<provider>`) rather than one at a time. Anything else (a
+refused key, a model that does not exist, an unparseable answer) fails on the
+first reply, because retrying it only spends quota. Gemini's free tier answers
+"surchargé" often enough that this is the difference between commenting two
+games in ten and commenting ten. `PROVIDERS.anthropic` is the paid spare; its
+`pricing` is what `cost.js` turns into the figure per game shown in Réglages,
+so a model is chosen against a number rather than against a rate card.
+
+**A re-analysis keeps the commentary it is still describing.** `saveAnalysis`
+carries across every note whose ply came back with the same judgment and the
+same `best_move_san`, and drops the rest (`keptCommentary`). Clearing all of it
+was safe and wrong: the queue re-deepens games on its own, so a whole game's
+commentary disappeared every time it did, which reads as "the coach is not
+stored at all".
 
 The way to make the coach better is to **widen the fact base, not to tune the
 prompt or buy a bigger model**. `position.js` and the `[%clk]` clock times are

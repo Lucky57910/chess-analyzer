@@ -78,6 +78,38 @@ const GAME_COLUMNS = [
 
 const now = () => new Date().toISOString();
 
+/**
+ * The commentary a re-analysis is allowed to keep.
+ *
+ * A comment describes one move and one verdict on it. Re-running the engine
+ * deeper changes some of those verdicts and leaves most of them alone, so the
+ * question is per ply, not per game: keep the note where the judgment and the
+ * move the engine preferred both came back the same, drop it where either
+ * moved. What is dropped is asked for again on the next run of the coach; what
+ * is kept never had to be bought twice.
+ *
+ * The comparison is deliberately narrow. A centipawn figure shifts by a point
+ * or two between depths on almost every move and means nothing to a sentence
+ * that says "tu sors ta dame trop tôt"; the judgment and the refutation are
+ * what a comment is actually written about.
+ */
+export function keptCommentary(previous, moves) {
+  const notes = previous?.coach;
+  if (!notes || !Object.keys(notes).length) return {};
+
+  const before = new Map((previous.moves ?? []).map((move) => [move.ply, move]));
+  const kept = {};
+  for (const move of moves) {
+    const note = notes[move.ply];
+    const old = before.get(move.ply);
+    if (!note || !old) continue;
+    if ((old.judgment ?? null) !== (move.judgment ?? null)) continue;
+    if ((old.best_move_san ?? null) !== (move.best_move_san ?? null)) continue;
+    kept[move.ply] = note;
+  }
+  return kept;
+}
+
 export function createGameStore(repo) {
   return {
     /**
@@ -359,6 +391,11 @@ export function createGameStore(repo) {
       const errors = moves.filter((m) => m.judgment === "mistake" || m.judgment === "blunder");
       const blunders = moves.filter((m) => m.judgment === "blunder");
 
+      const previous = await repo.one(
+        "SELECT moves, coach FROM analyses WHERE game_id = ?",
+        [gameId],
+      );
+
       const payload = {
         engine_depth: result.engine_depth,
         engine_name: result.engine_name,
@@ -372,11 +409,15 @@ export function createGameStore(repo) {
         acpl_black: result.acpl_black,
         judgment_counts: result.judgment_counts,
         phase_stats: result.phase_stats,
-        // Cleared, not carried over. The commentary was written about a
-        // particular set of judgments; at a deeper search a move called a
-        // blunder can come back merely inaccurate, and a coach still calling
-        // it a blunder is worse than a coach saying nothing.
-        coach: {},
+        // Kept move by move, not wholesale. The commentary was written about
+        // a particular set of judgments, and at a deeper search a move called
+        // a blunder can come back merely inaccurate - a coach still calling it
+        // a blunder is worse than a coach saying nothing. But that is true of
+        // the handful of moves whose verdict actually moved, and clearing all
+        // of them meant the queue quietly deleting a whole game's commentary
+        // every time it re-deepened one, which is the reason it looked as
+        // though nothing was ever stored.
+        coach: keptCommentary(previous, moves),
       };
 
       const columns = Object.keys(payload);
@@ -407,9 +448,9 @@ export function createGameStore(repo) {
      * a quota that ran out halfway, one chunk the model refused - adds what it
      * managed without dropping what a previous run produced.
      *
-     * Keyed by ply, as a JSON object. `saveAnalysis` overwrites the row and so
-     * clears this, which is the behaviour we want: a re-analysis renews the
-     * moves the commentary was written about.
+     * Keyed by ply, as a JSON object. `saveAnalysis` overwrites the row and
+     * carries across only the notes whose move came back with the same verdict
+     * — see `keptCommentary`.
      */
     async saveCoach(gameId, notes) {
       const row = await repo.one("SELECT coach FROM analyses WHERE game_id = ?", [gameId]);

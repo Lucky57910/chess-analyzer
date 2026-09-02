@@ -167,10 +167,11 @@ export function createApi({ repo, store, sync, engine, coach, settings = DEFAULT
      * already found, so with nothing found there is nothing to say and the
      * request would be an invitation to invent.
      *
-     * The commentary is stored, so it costs its API quota once. Re-analysing
-     * the game clears it, because the moves it describes have been re-judged.
+     * The commentary is stored, so it costs its quota once: re-analysing the
+     * game keeps every note whose move came back with the same verdict, and
+     * drops only the ones that are now describing something else.
      */
-    async coachGame(id, { onProgress, onWait } = {}) {
+    async coachGame(id, { onProgress, onWait, onFallback } = {}) {
       if (!coach) throw new ApiError(503, "Le coach n'est pas disponible sur cet appareil.");
       const game = await store.get(id);
       if (!game) throw new ApiError(404, "Partie introuvable");
@@ -180,15 +181,16 @@ export function createApi({ repo, store, sync, engine, coach, settings = DEFAULT
       }
 
       const config = await readCoachConfig(repo);
-      const { notes, failed } = await coach.commentGame({
+      const { notes, failed, providers } = await coach.commentGame({
         game,
         analysis,
         config,
         onProgress,
         onWait,
+        onFallback,
       });
       const stored = await store.saveCoach(id, notes);
-      return { notes: stored, added: Object.keys(notes).length, failed };
+      return { notes: stored, added: Object.keys(notes).length, failed, providers };
     },
 
     /**

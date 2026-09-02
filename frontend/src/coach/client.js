@@ -16,6 +16,13 @@
  *     of the model;
  *   - a chunk that fails leaves the others standing.
  *
+ * And a chunk fails later than it used to. A 429, a 5xx and a request that
+ * never arrived are all *the moment*, not the request: they are waited out,
+ * and then handed to the next provider a key is stored for. The free tier this
+ * app defaults to answers "modèle surchargé" often enough that a game took
+ * several attempts to comment, and every one of those attempts was the app
+ * repeating a message it could have acted on instead.
+ *
  * Nothing here is required for the app to work. Without a key, `narrate.js`
  * keeps saying what the engine found, exactly as before — the coach is a layer
  * on top of that, never a replacement for it.
@@ -119,13 +126,46 @@ export function validate(payload, plies) {
   return notes;
 }
 
-/** A 429 is a wait, not a failure, until it has been waited out twice. */
-class RateLimited extends Error {
-  constructor(headers) {
-    super("rate limited");
+/**
+ * A failure that is about the moment rather than about the request.
+ *
+ * Three of them, and telling them apart is the whole difference between a
+ * coach that works and one that works two times in ten:
+ *
+ *   - `rate`: a 429. Our own window is respected, but the daily quota is a
+ *     separate counter and the provider's minute does not start when ours
+ *     does.
+ *   - `overloaded`: a 500, 502, 503 or 504. The free tier answers this a lot,
+ *     and it used to kill the chunk outright — "serveur surchargé, réessayez
+ *     plus tard" was the app dutifully repeating a message it should have
+ *     acted on.
+ *   - `network`: the request never arrived. A phone changing cell or leaving
+ *     wifi mid-commentary is not a reason to lose sixteen moves of it.
+ *
+ * All three are retried, and then handed to the next provider that has a key.
+ * Anything else — a refused key, a model that does not exist, an answer that
+ * will not parse — is a real failure and is raised as one.
+ */
+class Retriable extends Error {
+  constructor(kind, { headers, message } = {}) {
+    super(message ?? kind);
+    this.kind = kind;
     this.headers = headers ?? {};
   }
 }
+
+/** What to tell the user when every provider has refused for this reason. */
+const EXHAUSTED = {
+  rate:
+    "Quota du modèle atteint. Réessayez dans quelques minutes, ou ajoutez une clé " +
+    "chez un autre fournisseur dans les réglages.",
+  overloaded:
+    "Le modèle est surchargé et l’est resté après plusieurs tentatives. Une clé " +
+    "chez un second fournisseur évite d’attendre qu’il se libère.",
+  network:
+    "Le modèle est injoignable. Vérifiez la connexion du téléphone, puis relancez : " +
+    "les coups déjà commentés sont conservés.",
+};
 
 /**
  * @param {object} http A CapacitorHttp-shaped client: `post({url, headers, data})`
@@ -145,16 +185,23 @@ export function createCoach(http, { sleep, now } = {}) {
       model: model || adapter.models[0],
       system: SYSTEM_PROMPT,
       user,
-      maxTokens: MAX_OUTPUT_TOKENS,
+      maxTokens: adapter.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
     });
 
-    const response = await http.post({
-      url,
-      headers,
-      data,
-      connectTimeout: 30_000,
-      readTimeout: 90_000,
-    });
+    let response;
+    try {
+      response = await http.post({
+        url,
+        headers,
+        data,
+        connectTimeout: 30_000,
+        readTimeout: 90_000,
+      });
+    } catch (error) {
+      // The transport threw: DNS, a dropped connection, a timeout. Nothing was
+      // answered, so there is nothing to read and everything to retry.
+      throw new Retriable("network", { message: String(error?.message ?? error) });
+    }
 
     // The native layer parses JSON when the content type says so and hands
     // back a string when it does not, exactly as the Chess.com client found.
@@ -163,7 +210,13 @@ export function createCoach(http, { sleep, now } = {}) {
     if (response.status === 401 || response.status === 403) {
       throw new CoachError("Clé API refusée. Vérifiez-la dans les réglages.");
     }
-    if (response.status === 429) throw new RateLimited(response.headers);
+    if (response.status === 429) throw new Retriable("rate", { headers: response.headers });
+    if (response.status >= 500) {
+      throw new Retriable("overloaded", {
+        headers: response.headers,
+        message: adapter.error?.(body) ?? `Le modèle a répondu ${response.status}`,
+      });
+    }
     if (response.status >= 400) {
       throw new CoachError(adapter.error?.(body) ?? `Le modèle a répondu ${response.status}`);
     }
@@ -179,27 +232,39 @@ export function createCoach(http, { sleep, now } = {}) {
      *   back — a partial commentary is still worth storing, and saying how
      *   partial it is beats pretending it is complete.
      */
-    async commentGame({ game, analysis, config, onProgress, onWait }) {
+    async commentGame({ game, analysis, config, onProgress, onWait, onFallback }) {
       if (!config?.apiKey) throw new CoachError("Aucune clé API renseignée.");
 
       const chunks = buildDigest({ game, analysis });
       if (!chunks.length) throw new CoachError("Cette partie n’a aucun coup à commenter.");
 
-      // A window per call, not per app: the coach is only ever driven from one
-      // screen, and a limiter that outlives the request it protects would hold
-      // a fresh commentary back for a minute after an unrelated one finished.
-      const limiter = createLimiter({
-        rpm: providerFor(config.provider).rpm ?? 10,
-        now,
-        sleep: wait,
-      });
+      // The provider asked first, then every other one a key is stored for.
+      // Nothing is sent anywhere until the one before it has run out of
+      // retries: this is a spare wheel, not a race.
+      const chain = [
+        { provider: config.provider, model: config.model, apiKey: config.apiKey },
+        ...(config.fallbacks ?? []).filter((entry) => entry.apiKey),
+      ];
+
+      // A window per provider, per call. Per provider because their limits are
+      // separate counters; per call because the coach is only ever driven from
+      // one screen, and a limiter that outlived its request would hold a fresh
+      // commentary back for a minute after an unrelated one finished.
+      const limiters = new Map(
+        chain.map(({ provider }) => [
+          provider,
+          createLimiter({ rpm: providerFor(provider).rpm ?? 10, now, sleep: wait }),
+        ]),
+      );
 
       const notes = {};
+      const used = new Set();
       let failed = 0;
 
       for (const [index, { plies, text }] of chunks.entries()) {
         try {
-          const answer = await send({ config, user: text, limiter, onWait });
+          const { answer, provider } = await send({ chain, user: text, limiters, onWait, onFallback });
+          used.add(provider);
           Object.assign(notes, validate(extractJson(answer), plies));
         } catch (error) {
           // One refused chunk must not cost the moves an earlier one already
@@ -211,40 +276,48 @@ export function createCoach(http, { sleep, now } = {}) {
         onProgress?.(index + 1, chunks.length);
       }
 
-      return { notes, failed };
+      return { notes, failed, providers: [...used] };
     },
   };
 
   /**
-   * One chunk, through the limiter, retrying a 429 rather than losing the
-   * chunk to it.
+   * One chunk: retried where retrying can work, then moved to the next
+   * provider rather than lost.
    *
-   * The limiter should make a 429 rare — but "rare" is not "never": the daily
-   * quota is a separate counter, another app may share the project, and the
-   * provider's minute does not start when ours does. Waiting out one or two is
-   * cheaper than throwing away sixteen moves of commentary.
+   * Both halves earn their keep. The limiter should make a 429 rare — but
+   * "rare" is not "never", and waiting out one or two is cheaper than throwing
+   * away sixteen moves of commentary. And an overloaded free tier is often
+   * still overloaded after three waits, which is where the second key comes
+   * in: another provider, same digest, same validation, and the reader cannot
+   * tell which one answered.
    */
-  async function send({ config, user, limiter, onWait }) {
-    for (let attempt = 0; ; attempt += 1) {
-      await limiter.take();
-      try {
-        return await post({ ...config, user });
-      } catch (error) {
-        if (!(error instanceof RateLimited)) throw error;
-        if (attempt >= MAX_RETRIES) {
-          throw new CoachError(
-            "Quota du modèle atteint. Réessayez dans quelques minutes, ou passez à un modèle " +
-              "à quota plus large dans les réglages.",
-          );
+  async function send({ chain, user, limiters, onWait, onFallback }) {
+    let last = null;
+
+    for (const [rank, config] of chain.entries()) {
+      if (rank > 0) onFallback?.(providerFor(config.provider).label, last?.kind ?? null);
+
+      for (let attempt = 0; ; attempt += 1) {
+        await limiters.get(config.provider).take();
+        try {
+          return { answer: await post({ ...config, user }), provider: config.provider };
+        } catch (error) {
+          // A refused key or an unparseable answer is not the moment's fault
+          // and will fail the same way on every retry and every provider.
+          if (!(error instanceof Retriable)) throw error;
+          last = error;
+          if (attempt >= MAX_RETRIES) break;
+          // No extra penalty on the limiter: the rejected request is already
+          // in its window, and stacking a full-window wait on top of the retry
+          // delay would sit out ninety seconds for one 429.
+          const delay = retryDelay(error.headers, attempt);
+          onWait?.(Math.round(delay / 1000));
+          await wait(delay);
         }
-        // No extra penalty on the limiter: the rejected request is already in
-        // its window, and stacking a full-window wait on top of the retry
-        // delay would sit out ninety seconds for one 429.
-        const delay = retryDelay(error.headers, attempt);
-        onWait?.(Math.round(delay / 1000));
-        await wait(delay);
       }
     }
+
+    throw new CoachError(EXHAUSTED[last?.kind] ?? EXHAUSTED.overloaded);
   }
 }
 

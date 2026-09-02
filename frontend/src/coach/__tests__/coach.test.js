@@ -28,9 +28,19 @@ import {
   CHUNK_SIZE,
 } from "../digest.js";
 import { createLimiter, retryDelay } from "../throttle.js";
+import { costPerGame, formatCost, tokensForGame } from "../cost.js";
 import { narrate } from "../narrate.js";
 import { PROVIDERS } from "../providers.js";
-import { readCoachConfig, SETTING_COACH_MODEL, SETTING_COACH_PROVIDER } from "../config.js";
+import {
+  keySetting,
+  publicCoachConfig,
+  readCoachConfig,
+  writeCoachConfig,
+  SETTING_COACH_FALLBACK,
+  SETTING_COACH_KEY,
+  SETTING_COACH_MODEL,
+  SETTING_COACH_PROVIDER,
+} from "../config.js";
 
 /** A four-move game with one judged blunder for White. */
 const GAME = {
@@ -225,14 +235,16 @@ describe("commenting a whole game", () => {
       { status: 500, data: { error: { message: "boom" } } },
     ]);
     const seen = [];
-    const result = await createCoach(http).commentGame({
+    const result = await createCoach(http, virtualClock()).commentGame({
       game: long,
       analysis: { moves: [] },
       config,
       onProgress: (done, total) => seen.push(`${done}/${total}`),
     });
 
-    expect(calls).toHaveLength(2);
+    // One request for the first chunk, then three for the second: a 500 is
+    // retried before it is believed.
+    expect(calls).toHaveLength(4);
     // The second request failed; the first request's work survives it.
     expect(result.notes[1]).toBe("Bon départ.");
     expect(result.failed).toBe(1);
@@ -242,8 +254,61 @@ describe("commenting a whole game", () => {
   it("gives up only when every chunk failed, and says why", async () => {
     const { http } = fakeHttp([{ status: 500, data: { error: { message: "surcharge" } } }]);
     await expect(
-      createCoach(http).commentGame({ game: GAME, analysis: ANALYSIS, config }),
-    ).rejects.toThrow(/surcharge/);
+      createCoach(http, virtualClock()).commentGame({ game: GAME, analysis: ANALYSIS, config }),
+    ).rejects.toThrow(/surchargé/);
+  });
+
+  // The report this exists for: "sur une dizaine d'essais, deux parties
+  // commentées". A 503 used to kill the chunk on the spot and the app repeated
+  // the provider's message back - which is the one thing it could do nothing
+  // with. It is the moment, not the request.
+  it("waits out an overloaded model instead of losing the chunk", async () => {
+    const { http, calls } = fakeHttp([
+      { status: 503, data: { error: { message: "model overloaded" } } },
+      geminiReply([{ ply: 1, text: "Reprise après surcharge." }]),
+    ]);
+    const result = await createCoach(http, virtualClock()).commentGame({
+      game: GAME,
+      analysis: ANALYSIS,
+      config,
+    });
+
+    expect(calls).toHaveLength(2);
+    expect(result.notes[1]).toBe("Reprise après surcharge.");
+    expect(result.failed).toBe(0);
+  });
+
+  // A phone changing cell mid-commentary. The transport throws, nothing was
+  // answered, and there is nothing to read - which is exactly the case worth
+  // retrying rather than reporting.
+  it("retries a request that never arrived", async () => {
+    let first = true;
+    const { http } = fakeHttp([
+      () => {
+        if (first) {
+          first = false;
+          throw new Error("Network request failed");
+        }
+        return geminiReply([{ ply: 1, text: "Le réseau est revenu." }]);
+      },
+    ]);
+    const result = await createCoach(http, virtualClock()).commentGame({
+      game: GAME,
+      analysis: ANALYSIS,
+      config,
+    });
+    expect(result.notes[1]).toBe("Le réseau est revenu.");
+  });
+
+  it("says the network is the problem when it never comes back", async () => {
+    const { http } = fakeHttp([
+      () => {
+        throw new Error("Network request failed");
+      },
+    ]);
+    await expect(
+      createCoach(http, virtualClock()).commentGame({ game: GAME, analysis: ANALYSIS, config }),
+    ).rejects.toThrow(/injoignable/);
   });
 
   it("says which credential problem it hit, in French", async () => {
@@ -588,5 +653,268 @@ describe("outliving a model generation", () => {
       settings({ [SETTING_COACH_PROVIDER]: "gemini", [SETTING_COACH_MODEL]: chosen }),
     );
     expect(config.model).toBe(chosen);
+  });
+});
+
+/**
+ * A key per provider, and a provider per failure.
+ *
+ * The default is a free tier, and a free tier says no: quota, overload, a
+ * request that never arrives. One key meant one answer to that - wait, and try
+ * the same door again. A second key elsewhere is a second door, and the thing
+ * that made it possible is storing keys separately: the settings screen used
+ * to drop the key whenever the provider changed.
+ */
+describe("more than one way to reach a model", () => {
+  const store = (rows = {}) => {
+    const data = { ...rows };
+    return {
+      data,
+      getSetting: async (key, fallback) => data[key] ?? fallback,
+      setSetting: async (key, value) => {
+        data[key] = value;
+      },
+    };
+  };
+
+  it("offers every other provider holding a key as a spare", async () => {
+    const config = await readCoachConfig(
+      store({
+        [SETTING_COACH_PROVIDER]: "gemini",
+        [keySetting("gemini")]: "g-key",
+        [keySetting("anthropic")]: "a-key",
+      }),
+    );
+    expect(config.apiKey).toBe("g-key");
+    expect(config.fallbacks).toEqual([
+      { provider: "anthropic", model: PROVIDERS.anthropic.models[0], apiKey: "a-key" },
+    ]);
+  });
+
+  it("offers none when the chain is switched off", async () => {
+    const config = await readCoachConfig(
+      store({
+        [SETTING_COACH_PROVIDER]: "gemini",
+        [SETTING_COACH_FALLBACK]: "0",
+        [keySetting("gemini")]: "g-key",
+        [keySetting("anthropic")]: "a-key",
+      }),
+    );
+    expect(config.fallback).toBe(false);
+    expect(config.fallbacks).toEqual([]);
+  });
+
+  // The screen has to know which providers it can reach without ever holding a
+  // key: a secret that is never read back cannot be read off a screenshot.
+  it("tells the screen which keys exist and none of what they are", async () => {
+    const config = await publicCoachConfig(
+      store({
+        [SETTING_COACH_PROVIDER]: "anthropic",
+        [keySetting("gemini")]: "g-key",
+        [keySetting("anthropic")]: "a-key",
+      }),
+    );
+    expect(config.keys).toEqual({ gemini: true, openrouter: false, anthropic: true });
+    expect(config.key_set).toBe(true);
+    expect(JSON.stringify(config)).not.toContain("a-key");
+  });
+
+  it("keeps the other providers' keys when the provider changes", async () => {
+    const repo = store({
+      [SETTING_COACH_PROVIDER]: "gemini",
+      [keySetting("gemini")]: "g-key",
+    });
+    await writeCoachConfig(repo, { provider: "anthropic" });
+    await writeCoachConfig(repo, { apiKey: "a-key" });
+
+    const config = await readCoachConfig(repo);
+    expect(config.provider).toBe("anthropic");
+    expect(config.apiKey).toBe("a-key");
+    expect(config.fallbacks.map((f) => f.provider)).toEqual(["gemini"]);
+  });
+
+  // The single key row that predates the split belongs to whoever was selected
+  // when it was written, and leaving is the last moment that is knowable.
+  it("adopts the single key an older version stored", async () => {
+    const repo = store({ [SETTING_COACH_PROVIDER]: "gemini", [SETTING_COACH_KEY]: "old-key" });
+    expect((await readCoachConfig(repo)).apiKey).toBe("old-key");
+
+    await writeCoachConfig(repo, { provider: "anthropic" });
+    expect(repo.data[keySetting("gemini")]).toBe("old-key");
+  });
+
+  it("forgets a key for good, including the row an older version wrote", async () => {
+    const repo = store({ [SETTING_COACH_PROVIDER]: "gemini", [SETTING_COACH_KEY]: "old-key" });
+    await writeCoachConfig(repo, { apiKey: "" });
+    expect((await readCoachConfig(repo)).apiKey).toBe("");
+  });
+});
+
+describe("falling back to another provider", () => {
+  const chained = {
+    provider: "gemini",
+    model: "gemini-3.7-flash",
+    apiKey: "g-key",
+    fallbacks: [{ provider: "anthropic", model: "claude-haiku-4-5", apiKey: "a-key" }],
+  };
+
+  const claudeReply = (comments) => ({
+    status: 200,
+    data: { content: [{ type: "text", text: JSON.stringify({ comments }) }] },
+  });
+
+  it("moves to the next provider once the first has run out of retries", async () => {
+    const spares = [];
+    const { http, calls } = fakeHttp([
+      { status: 503, data: { error: { message: "overloaded" } } },
+      { status: 503, data: { error: { message: "overloaded" } } },
+      { status: 503, data: { error: { message: "overloaded" } } },
+      claudeReply([{ ply: 1, text: "Commenté ailleurs." }]),
+    ]);
+
+    const result = await createCoach(http, virtualClock()).commentGame({
+      game: GAME,
+      analysis: ANALYSIS,
+      config: chained,
+      onFallback: (label) => spares.push(label),
+    });
+
+    expect(calls).toHaveLength(4);
+    expect(calls[3].url).toContain("api.anthropic.com");
+    expect(calls[3].headers["x-api-key"]).toBe("a-key");
+    expect(result.notes[1]).toBe("Commenté ailleurs.");
+    expect(result.providers).toEqual(["anthropic"]);
+    // Said once on screen: a quota spent somewhere else must not be spent
+    // silently.
+    expect(spares).toEqual(["Claude"]);
+  });
+
+  // A refused key fails the same way on every retry and at every provider, and
+  // passing it on would spend a second key's quota to learn nothing.
+  it("does not hand a refused key to the next provider", async () => {
+    const { http, calls } = fakeHttp([{ status: 401, data: {} }]);
+    await expect(
+      createCoach(http, virtualClock()).commentGame({
+        game: GAME,
+        analysis: ANALYSIS,
+        config: chained,
+      }),
+    ).rejects.toThrow(/Clé API refusée/);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("keeps the same digest whichever provider answers", async () => {
+    const { http, calls } = fakeHttp([
+      { status: 503, data: {} },
+      { status: 503, data: {} },
+      { status: 503, data: {} },
+      claudeReply([{ ply: 1, text: "ok" }]),
+    ]);
+    await createCoach(http, virtualClock()).commentGame({
+      game: GAME,
+      analysis: ANALYSIS,
+      config: chained,
+    });
+
+    expect(JSON.stringify(calls[3].data)).not.toContain(GAME.pgn);
+    expect(calls[3].data.messages[0].content).toBe(calls[0].data.input);
+  });
+
+  it("says every provider refused rather than naming only the last", async () => {
+    const { http } = fakeHttp([{ status: 503, data: { error: { message: "overloaded" } } }]);
+    await expect(
+      createCoach(http, virtualClock()).commentGame({
+        game: GAME,
+        analysis: ANALYSIS,
+        config: chained,
+      }),
+    ).rejects.toThrow(/surchargé/);
+  });
+});
+
+describe("asking Claude", () => {
+  it("sends the shape the Messages API documents", () => {
+    const { url, headers, data } = PROVIDERS.anthropic.request({
+      apiKey: "k",
+      model: "claude-opus-5",
+      system: "s",
+      user: "u",
+      maxTokens: 8000,
+    });
+    expect(url).toBe("https://api.anthropic.com/v1/messages");
+    expect(headers["anthropic-version"]).toBe("2023-06-01");
+    expect(headers["x-api-key"]).toBe("k");
+    expect(data).toMatchObject({
+      model: "claude-opus-5",
+      max_tokens: 8000,
+      system: "s",
+      messages: [{ role: "user", content: "u" }],
+    });
+    // Stockfish did the analysis; what is left is writing it down in French.
+    expect(data.output_config).toEqual({ effort: "low" });
+  });
+
+  // `output_config.effort` is rejected outright by Haiku 4.5, and sending it
+  // would break the cheapest model on the list for whoever picks it.
+  it("leaves the effort off the model that refuses it", () => {
+    const { data } = PROVIDERS.anthropic.request({
+      apiKey: "k",
+      model: "claude-haiku-4-5",
+      maxTokens: 8000,
+    });
+    expect(data.output_config).toBe(undefined);
+  });
+
+  it("reads the text blocks and leaves the thinking behind", () => {
+    const text = PROVIDERS.anthropic.text({
+      content: [
+        { type: "thinking", thinking: "pas ça" },
+        { type: "text", text: '{"comments":[]}' },
+      ],
+    });
+    expect(text).toBe('{"comments":[]}');
+  });
+});
+
+/**
+ * What a commented game costs.
+ *
+ * "$25 per million output tokens" is not a number anyone can decide on. This
+ * one is - and the tests pin the arithmetic rather than the constants, because
+ * the measured sizes will drift and a test asserting a price in dollars would
+ * then fail for the wrong reason.
+ */
+describe("what a paid coach costs", () => {
+  it("splits a game into the requests the digest actually makes", () => {
+    expect(tokensForGame({ moves: 12 }).requests).toBe(1);
+    expect(tokensForGame({ moves: CHUNK_SIZE + 1 }).requests).toBe(2);
+  });
+
+  it("charges thinking to the output, where it is billed", () => {
+    const quiet = tokensForGame({ thinks: false });
+    const thinking = tokensForGame({ thinks: true });
+    expect(thinking.output).toBeGreaterThan(quiet.output);
+    expect(thinking.input).toBe(quiet.input);
+  });
+
+  it("prices a game in cents, and ranks the models the way the rates do", () => {
+    const opus = costPerGame("anthropic", "claude-opus-5");
+    const haiku = costPerGame("anthropic", "claude-haiku-4-5");
+    expect(opus).toBeGreaterThan(haiku);
+    expect(opus).toBeLessThan(1);
+    expect(haiku).toBeGreaterThan(0);
+  });
+
+  // Zero would read as "this costs nothing", and on a free tier the quota is
+  // the limit that actually bites.
+  it("says nothing rather than zero for a free tier", () => {
+    expect(costPerGame("gemini", "gemini-3.7-flash")).toBe(null);
+    expect(formatCost(null)).toBe(null);
+  });
+
+  it("keeps enough digits for the models to stay apart", () => {
+    expect(formatCost(costPerGame("anthropic", "claude-haiku-4-5"))).not.toBe(
+      formatCost(costPerGame("anthropic", "claude-sonnet-5")),
+    );
   });
 });

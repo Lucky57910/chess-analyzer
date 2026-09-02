@@ -302,6 +302,10 @@ export default function GameAnalysis() {
         // A pause with no explanation reads as a frozen button, and this one
         // can last half a minute.
         onWait: (seconds) => setCoachStatus(`Limite du modèle atteinte, reprise dans ${seconds} s…`),
+        // Switching provider mid-commentary is invisible in the result - the
+        // facts and the validation are the same - so it is said here, once, or
+        // a quota spent somewhere else is spent silently.
+        onFallback: (label) => setCoachStatus(`Fournisseur indisponible, on passe à ${label}…`),
       })
       setCoachNotes(result.notes)
       // The total, not just what this run added: a second run over a partly

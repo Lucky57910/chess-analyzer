@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import Button from '../components/ui/Button'
 import { Panel } from '../components/ui/Card'
 import Segmented from '../components/ui/Segmented'
+import { costPerGame, formatCost } from '../coach/cost.js'
 import { PROVIDERS } from '../coach/providers.js'
 import { backupFilename } from '../data/backup'
 import { saveAndShare } from '../data/share'
@@ -25,13 +26,22 @@ function CoachSettings({ config, onSave, busy }) {
   const [model, setModel] = useState(config?.model ?? '')
   const [key, setKey] = useState('')
   const adapter = PROVIDERS[provider] ?? PROVIDERS.gemini
+  const chosen = model || adapter.models[0]
 
   // Picking a provider resets the model, because a model name belongs to one
-  // provider and the stored one is cleared on the same event.
+  // provider and the stored one is cleared on the same event. The key is not
+  // reset with it: one is stored per provider, which is what lets a second one
+  // stand in when the first will not answer.
   function pickProvider(next) {
     setProvider(next)
     setModel(PROVIDERS[next].models[0])
   }
+
+  const stored = config?.keys ?? {}
+  const withKeys = Object.keys(stored).filter((name) => stored[name])
+  // The chain is the primary plus every other provider holding a key, so it is
+  // only a chain at two.
+  const spares = withKeys.filter((name) => name !== config?.provider)
 
   return (
     <Panel
@@ -53,28 +63,38 @@ function CoachSettings({ config, onSave, busy }) {
 
       <label className="flex flex-col gap-1.5">
         <span className="text-label text-faint">Modèle</span>
-        <select
-          value={model || adapter.models[0]}
-          onChange={(e) => setModel(e.target.value)}
-          className={inputClass}
-        >
-          {adapter.models.map((name) => (
-            <option key={name} value={name}>
-              {name}
-            </option>
-          ))}
+        <select value={chosen} onChange={(e) => setModel(e.target.value)} className={inputClass}>
+          {adapter.models.map((name) => {
+            const price = formatCost(costPerGame(adapter.key, name))
+            return (
+              <option key={name} value={name}>
+                {name}
+                {price ? ` — ${price} / partie` : ''}
+              </option>
+            )
+          })}
         </select>
+        {/* A price per million tokens is not a number anyone can act on. This
+            one is measured from what this app actually sends: the digest, the
+            instructions, and one short paragraph per move. */}
+        {costPerGame(adapter.key, chosen) !== null && (
+          <span className="text-label leading-relaxed text-faint">
+            Estimation : {formatCost(costPerGame(adapter.key, chosen))} par partie commentée,
+            soit {formatCost(costPerGame(adapter.key, chosen) * 100)} pour cent parties. Une
+            partie déjà commentée ne l’est pas deux fois.
+          </span>
+        )}
       </label>
 
       <label className="flex flex-col gap-1.5">
         <span className="text-label text-faint">
-          Clé API {config?.key_set ? '· une clé est enregistrée' : '· aucune clé enregistrée'}
+          Clé API {stored[provider] ? '· une clé est enregistrée' : '· aucune clé enregistrée'}
         </span>
         <input
           type="password"
           value={key}
           onChange={(e) => setKey(e.target.value)}
-          placeholder={config?.key_set ? 'Laisser vide pour conserver la clé' : 'Collez votre clé'}
+          placeholder={stored[provider] ? 'Laisser vide pour conserver la clé' : 'Collez votre clé'}
           autoComplete="off"
           spellCheck="false"
           className={inputClass}
@@ -85,7 +105,8 @@ function CoachSettings({ config, onSave, busy }) {
           rel="noreferrer"
           className="text-label text-accent underline underline-offset-2"
         >
-          Obtenir une clé gratuite sur {new URL(adapter.keyUrl).host}
+          {adapter.free ? 'Obtenir une clé gratuite sur' : 'Créer une clé sur'}{' '}
+          {new URL(adapter.keyUrl).host}
         </a>
       </label>
 
@@ -96,17 +117,46 @@ function CoachSettings({ config, onSave, busy }) {
           onClick={() => {
             // An untouched field means "leave the stored key alone", which is
             // why it is `undefined` rather than the empty string here.
-            onSave({ provider, model: model || adapter.models[0], ...(key ? { apiKey: key } : {}) })
+            onSave({ provider, model: chosen, ...(key ? { apiKey: key } : {}) })
             setKey('')
           }}
         >
           Enregistrer
         </Button>
-        {config?.key_set && (
-          <Button variant="danger" disabled={busy} onClick={() => onSave({ apiKey: '' })}>
-            Oublier la clé
+        {stored[provider] && (
+          <Button
+            variant="danger"
+            disabled={busy}
+            onClick={() => onSave({ provider, model: chosen, apiKey: '' })}
+          >
+            Oublier la clé {adapter.label}
           </Button>
         )}
+      </div>
+
+      {/* One key per provider, so a second one is a spare rather than a
+          replacement. This is the answer to a free tier that answers
+          "surchargé" one time in three. */}
+      <div className="flex flex-col gap-1.5 rounded-lg border border-line bg-canvas px-3 py-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-label text-faint">Secours</span>
+          <Segmented
+            label="Basculer sur un autre fournisseur en cas de panne"
+            value={config?.fallback === false ? 'off' : 'on'}
+            options={[
+              { key: 'on', label: 'Activé' },
+              { key: 'off', label: 'Désactivé' },
+            ]}
+            onChange={(next) => onSave({ fallback: next === 'on' })}
+          />
+        </div>
+        <p className="text-label leading-relaxed text-faint">
+          {spares.length
+            ? `Si ${PROVIDERS[config.provider].label} refuse — quota, serveur surchargé, réseau — la
+               demande repart chez ${spares.map((name) => PROVIDERS[name].label).join(', ')}. Le
+               commentaire est le même : ils reçoivent les mêmes faits.`
+            : 'Enregistrez une clé chez un second fournisseur pour qu’il prenne le relais quand le premier refuse. Les clés sont conservées séparément : changer de fournisseur ici n’efface pas l’autre.'}
+        </p>
       </div>
 
       {/* Two things the user has to be told before turning this on, and the
@@ -115,7 +165,9 @@ function CoachSettings({ config, onSave, busy }) {
         <p className="text-label leading-relaxed text-muted">
           <span className="font-medium text-inaccuracy">Vos parties quittent le téléphone.</span>{' '}
           Activer le coach envoie à {adapter.label} ce que le moteur a trouvé sur vos coups.{' '}
-          {adapter.key === 'gemini'
+          {adapter.key === 'anthropic'
+            ? 'Palier payant : Anthropic n’entraîne pas ses modèles sur ce qui lui est envoyé par l’API.'
+            : adapter.key === 'gemini'
             ? 'Depuis l’Europe, Google applique au palier gratuit les règles du palier payant : ce contenu ne sert pas à entraîner ses modèles. Ses conditions réservent en revanche le palier gratuit au développement — partager cette application avec d’autres personnes en Europe demanderait un palier payant.'
             : 'Sur un palier gratuit, ce contenu sert en général à entraîner les modèles du fournisseur ; les paliers payants ne le font pas.'}{' '}
           Rien n’est envoyé tant que vous n’appuyez pas sur le bouton, sur l’écran d’une partie.
@@ -128,8 +180,9 @@ function CoachSettings({ config, onSave, busy }) {
       </div>
 
       <p className="text-label leading-relaxed text-faint">
-        Le commentaire est conservé après sa génération : il n’est demandé qu’une fois. Une
-        ré-analyse Stockfish l’efface, parce que les jugements qu’il décrit ont changé.
+        Le commentaire est conservé dans la base, à côté de l’analyse : il n’est demandé qu’une
+        fois, et une partie déjà commentée le reste. Une ré-analyse Stockfish n’efface que les
+        coups dont le verdict a changé — c’est d’eux que le commentaire parlait.
       </p>
     </Panel>
   )

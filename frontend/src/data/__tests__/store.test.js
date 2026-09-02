@@ -582,8 +582,55 @@ describe("storing the coach's commentary", () => {
     expect((await ctx.store.getAnalysis(gameId)).coach[1]).toBe("Ouverture classique.");
   });
 
-  it("is cleared by a re-analysis, because the moves it described were re-judged", async () => {
-    await ctx.store.saveCoach(gameId, { 3: "Trop tôt." });
+  // A deeper pass re-judges a handful of moves and leaves the rest exactly
+  // where they were. Dropping the whole commentary for those few meant the
+  // queue silently deleting a game's commentary every time it re-deepened it,
+  // which is what made it look as though nothing was ever stored.
+  it("survives a re-analysis that reached the same verdicts", async () => {
+    await ctx.store.saveCoach(gameId, { 1: "Ouverture classique.", 3: "Trop tôt." });
+    await ctx.store.saveAnalysis(gameId, analysisResult({ engine_depth: 20 }));
+
+    expect((await ctx.store.getAnalysis(gameId)).coach).toEqual({
+      1: "Ouverture classique.",
+      3: "Trop tôt.",
+    });
+  });
+
+  it("drops the note on a move the deeper search judged differently", async () => {
+    await ctx.store.saveCoach(gameId, { 1: "Ouverture classique.", 3: "Une gaffe." });
+    const deeper = analysisResult({ engine_depth: 20 });
+    // The same move, no longer a mistake: the sentence written about it is now
+    // describing something that did not happen.
+    deeper.moves = deeper.moves.map((move) =>
+      move.ply === 3 ? { ...move, judgment: "inaccuracy" } : move,
+    );
+    await ctx.store.saveAnalysis(gameId, deeper);
+
+    expect((await ctx.store.getAnalysis(gameId)).coach).toEqual({ 1: "Ouverture classique." });
+  });
+
+  // The verdict can hold while the reason changes: same "mistake", different
+  // move the engine wanted instead. The comment names that move.
+  it("drops the note when the engine changed its mind about the better move", async () => {
+    await ctx.store.saveCoach(gameId, { 3: "Il fallait jouer Nc3." });
+    const first = analysisResult();
+    first.moves = first.moves.map((move) =>
+      move.ply === 3 ? { ...move, best_move_san: "Nc3" } : move,
+    );
+    await ctx.store.saveAnalysis(gameId, first);
+    await ctx.store.saveCoach(gameId, { 3: "Il fallait jouer Nc3." });
+
+    const deeper = analysisResult({ engine_depth: 20 });
+    deeper.moves = deeper.moves.map((move) =>
+      move.ply === 3 ? { ...move, best_move_san: "d4" } : move,
+    );
+    await ctx.store.saveAnalysis(gameId, deeper);
+
+    expect((await ctx.store.getAnalysis(gameId)).coach).toEqual({});
+  });
+
+  it("keeps nothing for a ply the new analysis does not have", async () => {
+    await ctx.store.saveCoach(gameId, { 9: "Un coup qui n’existe plus." });
     await ctx.store.saveAnalysis(gameId, analysisResult({ engine_depth: 20 }));
     expect((await ctx.store.getAnalysis(gameId)).coach).toEqual({});
   });
