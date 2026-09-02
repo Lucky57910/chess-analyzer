@@ -17,6 +17,7 @@
 import { DEFAULT_SETTINGS } from "../engine/analyze.js";
 import { SETTING_LAST_SYNCED, SETTING_USERNAME } from "../data/sync.js";
 import { publicCoachConfig, readCoachConfig, writeCoachConfig } from "../coach/config.js";
+import { planGame, readChunk } from "../coach/client.js";
 
 export class ApiError extends Error {
   constructor(status, message) {
@@ -45,7 +46,7 @@ function flatten(row) {
   };
 }
 
-export function createApi({ repo, store, sync, engine, coach, settings = DEFAULT_SETTINGS }) {
+export function createApi({ repo, store, sync, engine, coach, runner, settings = DEFAULT_SETTINGS }) {
   /**
    * The whole archive, loaded once and kept until the database moves.
    *
@@ -171,7 +172,7 @@ export function createApi({ repo, store, sync, engine, coach, settings = DEFAULT
      * game keeps every note whose move came back with the same verdict, and
      * drops only the ones that are now describing something else.
      */
-    async coachGame(id, { onProgress, onWait, onFallback } = {}) {
+    async coachGame(id, { resume = true, onProgress, onWait, onFallback } = {}) {
       if (!coach) throw new ApiError(503, "Le coach n'est pas disponible sur cet appareil.");
       const game = await store.get(id);
       if (!game) throw new ApiError(404, "Partie introuvable");
@@ -185,12 +186,135 @@ export function createApi({ repo, store, sync, engine, coach, settings = DEFAULT
         game,
         analysis,
         config,
+        skipPlies: resume ? Object.keys(analysis.coach ?? {}) : [],
         onProgress,
         onWait,
         onFallback,
+        // Stored as each chunk lands rather than at the end. A commentary that
+        // was written, paid for and then lost to a phone call is the worst of
+        // the three outcomes.
+        onChunk: (written) => store.saveCoach(id, written),
       });
       const stored = await store.saveCoach(id, notes);
       return { notes: stored, added: Object.keys(notes).length, failed, providers };
+    },
+
+    /**
+     * Is there somewhere to run the coach other than this screen?
+     *
+     * The plugin exists on the device and nowhere else; on the web the proxy
+     * rejects, which is the answer.
+     */
+    async coachRunner() {
+      if (!runner) return { available: false };
+      try {
+        return await runner.available();
+      } catch {
+        return { available: false };
+      }
+    },
+
+    /**
+     * Ask for the permission the finished notification needs.
+     *
+     * Android 13 and up. Denied, the service still runs and still writes its
+     * answers; the user simply never learns it finished, which is the whole
+     * reason for running it there — so the ask happens before the first job
+     * rather than at install time.
+     */
+    async requestCoachNotifications() {
+      if (!runner) return { notifications: "denied" };
+      return runner.requestPermissions();
+    },
+
+    /**
+     * Hand the whole game to the foreground service and let go of it.
+     *
+     * The requests are built here — `planGame` needs the database, the PGN and
+     * chess.js — and what crosses to Java is bytes with a URL on them. That is
+     * what keeps the service as dumb as the engine plugin, and it is also what
+     * makes this testable: the plan is a value, and the fake runner in the
+     * tests receives exactly what the phone would.
+     *
+     * Already-commented moves are skipped, so finishing a commentary that half
+     * failed does not buy the half that worked a second time.
+     */
+    async coachGameBackground(id, { resume = true } = {}) {
+      if (!runner) throw new ApiError(503, "Le coach en arrière-plan n'est pas disponible ici.");
+      const game = await store.get(id);
+      if (!game) throw new ApiError(404, "Partie introuvable");
+      const analysis = await store.getAnalysis(id);
+      if (!analysis) {
+        throw new ApiError(409, "Lancez d'abord l'analyse Stockfish de cette partie.");
+      }
+
+      const config = await readCoachConfig(repo);
+      const chunks = planGame({
+        game,
+        analysis,
+        config,
+        skipPlies: resume ? Object.keys(analysis.coach ?? {}) : [],
+      });
+      if (!chunks.length) {
+        throw new ApiError(409, "Cette partie est déjà entièrement commentée.");
+      }
+
+      const jobId = `game-${id}-${Date.now()}`;
+      await runner.start({
+        jobId,
+        gameId: id,
+        label: `contre ${game.opponent_username}`,
+        chunks,
+      });
+      return { started: true, jobId, chunks: chunks.length };
+    },
+
+    /**
+     * Read back what the service wrote while the app was away.
+     *
+     * The service stored raw bodies, so this is where they become commentary:
+     * the provider's own shape is unwrapped, the JSON is pulled out, plies that
+     * were never asked about are dropped — the same `readChunk` the foreground
+     * path uses, against the same rules.
+     *
+     * A job is cleared only once its notes are in the database. A run that dies
+     * between the two finds the file again next time, and merging the same
+     * notes twice is the same as merging them once.
+     */
+    async collectCoachResults() {
+      if (!runner) return { games: [] };
+      let jobs = [];
+      try {
+        ({ jobs = [] } = await runner.pending());
+      } catch {
+        return { games: [] };
+      }
+
+      const games = [];
+      for (const job of jobs) {
+        const notes = {};
+        let failed = 0;
+        for (const chunk of job.chunks ?? []) {
+          try {
+            Object.assign(notes, readChunk({ ...chunk, plies: chunk.plies ?? [] }));
+          } catch {
+            failed += 1;
+          }
+        }
+        // A game whose analysis was replaced while the service was working has
+        // nowhere to put these, and `saveCoach` says so rather than inventing a
+        // row for an analysis that no longer exists.
+        try {
+          if (Object.keys(notes).length) await store.saveCoach(job.gameId, notes);
+          games.push({ gameId: job.gameId, added: Object.keys(notes).length, failed });
+        } catch {
+          // Left in place: nothing was stored, so nothing is lost by trying
+          // again after the next analysis finishes.
+          continue;
+        }
+        await runner.clear({ jobId: job.jobId }).catch(() => {});
+      }
+      return { games };
     },
 
     /**

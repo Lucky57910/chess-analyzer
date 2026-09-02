@@ -581,3 +581,176 @@ describe("splitting rated play from training", () => {
     expect(all.games.some((game) => game.game_kind === "training")).toBe(true);
   });
 });
+
+/**
+ * The coach running somewhere the WebView is not.
+ *
+ * Android freezes a backgrounded WebView, so a commentary started and pocketed
+ * used to stop. The work now goes to a native foreground service - and the one
+ * thing that service must not contain is judgment, so everything worth testing
+ * is on this side of the bridge: the requests are built here, the answers are
+ * read here, and the fake runner below receives exactly what the phone would.
+ */
+describe("the coach in the background", () => {
+  let ctx;
+  let gameId;
+  let runner;
+
+  const CONFIG = {
+    coach_provider: "gemini",
+    coach_api_key_gemini: "g-key",
+  };
+
+  /** The plugin, as a value: what was started, and what is waiting to be read. */
+  function fakeRunner() {
+    const started = [];
+    let jobs = [];
+    return {
+      started,
+      finish(chunks) {
+        const job = started.at(-1);
+        jobs = [{ jobId: job.jobId, gameId: job.gameId, chunks }];
+      },
+      available: async () => ({ available: true, needsPermission: true }),
+      requestPermissions: async () => ({ notifications: "granted" }),
+      start: async (payload) => {
+        started.push(payload);
+        return { started: true };
+      },
+      pending: async () => ({ jobs }),
+      clear: async ({ jobId }) => {
+        jobs = jobs.filter((job) => job.jobId !== jobId);
+      },
+    };
+  }
+
+  /** What Gemini's Interactions API answers with, as the service stored it. */
+  const answered = (plies, comments) => ({
+    plies,
+    provider: "gemini",
+    status: 200,
+    body: JSON.stringify({
+      steps: [
+        {
+          type: "model_output",
+          content: [{ type: "text", text: JSON.stringify({ comments }) }],
+        },
+      ],
+    }),
+  });
+
+  beforeEach(async () => {
+    ctx = await fixture();
+    for (const [key, value] of Object.entries(CONFIG)) await ctx.repo.setSetting(key, value);
+    runner = fakeRunner();
+    ctx.api = createApi({
+      repo: ctx.repo,
+      store: ctx.store,
+      sync: ctx.sync,
+      engine: ctx.engine,
+      runner,
+    });
+    const [game] = await ctx.api.games({ limit: 1 });
+    gameId = game.id;
+    await ctx.store.saveAnalysis(gameId, analysisResult());
+  });
+
+  it("builds every request here and sends bytes across", async () => {
+    const result = await ctx.api.coachGameBackground(gameId);
+    expect(result.started).toBe(true);
+
+    const [payload] = runner.started;
+    expect(payload.gameId).toBe(gameId);
+    expect(payload.chunks.length).toBeGreaterThan(0);
+
+    const [attempt] = payload.chunks[0].attempts;
+    expect(attempt.provider).toBe("gemini");
+    expect(attempt.url).toContain("generativelanguage.googleapis.com");
+    expect(attempt.headers["x-goog-api-key"]).toBe("g-key");
+    // A string of bytes, not an object: the carrier is not asked to have an
+    // opinion about JSON.
+    expect(typeof attempt.body).toBe("string");
+    // And the guard rail travels: the model never sees the game.
+    const game = await ctx.store.get(gameId);
+    expect(attempt.body).not.toContain(game.pgn);
+  });
+
+  it("stores what came back, keyed by ply", async () => {
+    await ctx.api.coachGameBackground(gameId);
+    const { plies } = runner.started[0].chunks[0];
+    runner.finish([answered(plies, [{ ply: plies[0], text: "Tu ouvres au centre." }])]);
+
+    const { games } = await ctx.api.collectCoachResults();
+    expect(games).toEqual([{ gameId, added: 1, failed: 0 }]);
+    expect((await ctx.store.getAnalysis(gameId)).coach[plies[0]]).toBe("Tu ouvres au centre.");
+  });
+
+  // The service stored a body and nothing else. Which field holds the text,
+  // whether it parses, whether that ply was ever asked about - all of it is
+  // decided back here, against the same rules the in-app path uses.
+  it("drops an answer about a move it never asked about", async () => {
+    await ctx.api.coachGameBackground(gameId);
+    const { plies } = runner.started[0].chunks[0];
+    runner.finish([
+      answered(plies, [
+        { ply: plies[0], text: "Gardé." },
+        { ply: 999, text: "Inventé." },
+      ]),
+    ]);
+
+    await ctx.api.collectCoachResults();
+    const { coach } = await ctx.store.getAnalysis(gameId);
+    expect(coach[plies[0]]).toBe("Gardé.");
+    expect(coach[999]).toBe(undefined);
+  });
+
+  it("counts a refused chunk instead of losing the others", async () => {
+    await ctx.api.coachGameBackground(gameId);
+    const { plies } = runner.started[0].chunks[0];
+    runner.finish([
+      answered(plies, [{ ply: plies[0], text: "Écrit." }]),
+      { plies: [999], error: "Le modèle a répondu 503" },
+    ]);
+
+    const { games } = await ctx.api.collectCoachResults();
+    expect(games[0]).toMatchObject({ added: 1, failed: 1 });
+  });
+
+  it("clears a job once, and only once it is stored", async () => {
+    await ctx.api.coachGameBackground(gameId);
+    const { plies } = runner.started[0].chunks[0];
+    runner.finish([answered(plies, [{ ply: plies[0], text: "Écrit." }])]);
+
+    await ctx.api.collectCoachResults();
+    expect((await ctx.api.collectCoachResults()).games).toEqual([]);
+  });
+
+  // Resuming is the difference between finishing a commentary and buying it
+  // twice: a chunk whose moves are all commented is not rebuilt.
+  it("does not pay again for the moves it already has", async () => {
+    await ctx.api.coachGameBackground(gameId);
+    const everything = runner.started[0].chunks.flatMap((chunk) => chunk.plies);
+    const notes = Object.fromEntries(everything.map((ply) => [ply, "déjà écrit"]));
+    await ctx.store.saveCoach(gameId, notes);
+
+    await expect(ctx.api.coachGameBackground(gameId)).rejects.toThrow(/déjà entièrement commentée/);
+    // And forcing it through is still possible, for a commentary that is
+    // simply bad rather than missing.
+    await ctx.api.coachGameBackground(gameId, { resume: false });
+    expect(runner.started).toHaveLength(2);
+  });
+
+  it("refuses a game Stockfish has not analysed", async () => {
+    const other = (await ctx.api.games({ limit: 100 })).find((game) => game.id !== gameId);
+    await expect(ctx.api.coachGameBackground(other.id)).rejects.toMatchObject({ status: 409 });
+  });
+
+  // In a browser there is no service, and the in-app loop is still the whole
+  // feature. Nothing here may throw because of that.
+  it("says there is nowhere to run it rather than failing", async () => {
+    const web = createApi({ repo: ctx.repo, store: ctx.store, sync: ctx.sync, engine: ctx.engine });
+    expect(await web.coachRunner()).toEqual({ available: false });
+    expect(await web.collectCoachResults()).toEqual({ games: [] });
+    await expect(web.coachGameBackground(gameId)).rejects.toMatchObject({ status: 503 });
+  });
+});

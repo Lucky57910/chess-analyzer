@@ -41,6 +41,7 @@ together, so verifying a native change means pushing and reading the run.
 | `src/components/Icon.jsx` | The icon set, inline. Replaced the emoji that Android drew differently on every device. |
 | `src/utils/api.js` | Facade the pages call. Keeps the shape the old HTTP client had. |
 | `android/app/src/main/java/.../StockfishPlugin.java` | Spawns the engine. Deliberately dumb. |
+| `android/app/src/main/java/.../CoachService.java` `CoachPlugin.java` | Posts the coach's prepared requests from a foreground service, and notifies. Equally dumb. |
 
 ## Things that will bite
 
@@ -100,6 +101,22 @@ first reply, because retrying it only spends quota. Gemini's free tier answers
 games in ten and commenting ten. `PROVIDERS.anthropic` is the paid spare; its
 `pricing` is what `cost.js` turns into the figure per game shown in Réglages,
 so a model is chosen against a number rather than against a rate card.
+
+**The coach can run with the app closed; the engine cannot.** Android freezes
+a backgrounded WebView, so anything that must survive the phone going in a
+pocket has to leave it. The coach is network work — a couple of POSTs — so it
+goes to a foreground service (`CoachService`) that shows a notification while
+it writes and another when it is done. The engine queue does not: it is CPU,
+and a phone analysing chess in a pocket is a phone with a dead battery.
+
+The split is the same one `StockfishPlugin` uses. `planGame` builds every
+request in JS — digest, prompt, provider shapes, fallback order — and hands
+Java a URL, some headers and a string of bytes; the service stores raw response
+bodies; `readChunk` turns them back into commentary on the next app open, with
+the same validation as the foreground path. Java knows nothing about chess,
+providers, or JSON. Results wait in `filesDir/coach/*.json` until
+`api.collectCoachResults()` stores them, and a job is cleared only after that,
+so a run that dies in between simply finds the file again.
 
 **Storing a key and choosing who is asked first are different actions.**
 `writeCoachConfig` takes `keyProvider` (file this key and model under that

@@ -1,7 +1,8 @@
-import { Suspense, lazy } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import Navigation, { BottomBar } from './components/Navigation'
 import { useSettings } from './hooks/useSettings'
+import { api } from './utils/api'
 
 // Split per route: the charting library only travels with the pages that draw
 // a chart, which matters more now that everything ships inside an APK.
@@ -26,6 +27,14 @@ const Loading = (
  */
 function Shell({ children }) {
   const { loading, error } = useSettings()
+
+  // What the background coach wrote while the app was closed. Reading it here
+  // rather than only on the game screen is what makes the notification's tap
+  // land somewhere useful: by the time any screen renders, the commentary is
+  // in the database.
+  useEffect(() => {
+    api.collectCoachResults().catch(() => {})
+  }, [])
 
   if (error) {
     return (

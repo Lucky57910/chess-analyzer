@@ -24,6 +24,16 @@
 
         </activity>
 
+        <!-- The coach's requests, posted while the app is not on screen.
+             `dataSync` is the type Android 14 requires for "finish this
+             network work the user asked for"; without a foreground service the
+             WebView is frozen the moment the app is backgrounded and the
+             commentary simply stops. -->
+        <service
+            android:name=".CoachService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -38,4 +48,9 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- The coach writing in the background, and saying when it is done. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

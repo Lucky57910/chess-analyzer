@@ -124,6 +124,9 @@ export default function GameAnalysis() {
   const [coachNotes, setCoachNotes] = useState(null)
   const [coachBusy, setCoachBusy] = useState(false)
   const [coachStatus, setCoachStatus] = useState(null)
+  // A job handed to the service. The screen is no longer doing the work, so
+  // the only way it learns the work is done is by asking.
+  const [coachWaiting, setCoachWaiting] = useState(false)
   const isDesktop = useMediaQuery('(min-width: 1024px)')
   const { settings: appSettings } = useSettings()
   const { running: queueRunning, stop: stopQueue } = useQueue()
@@ -131,6 +134,10 @@ export default function GameAnalysis() {
 
   const load = useCallback(async () => {
     try {
+      // Anything the background coach finished while this screen was closed is
+      // merged before the analysis is read, or the notes would appear only on
+      // the second visit.
+      await api.collectCoachResults().catch(() => {})
       const g = await api.game(gameId)
       setGame(g)
       if (g.analysis_status === 'done') {
@@ -146,6 +153,25 @@ export default function GameAnalysis() {
   useEffect(() => {
     load()
   }, [load])
+
+  /**
+   * Wait for a commentary being written somewhere else.
+   *
+   * The notification covers the case where the app was closed. This covers the
+   * other one: staying on the screen while the service works, where nothing
+   * would otherwise arrive until the page was left and opened again.
+   */
+  useEffect(() => {
+    if (!coachWaiting) return undefined
+    const id = setInterval(async () => {
+      const { games } = await api.collectCoachResults().catch(() => ({ games: [] }))
+      if (!games.some((entry) => String(entry.gameId) === String(gameId))) return
+      setCoachWaiting(false)
+      setCoachStatus(null)
+      load()
+    }, 5000)
+    return () => clearInterval(id)
+  }, [coachWaiting, gameId, load])
 
   // Poll while Stockfish is still working on this game.
   useEffect(() => {
@@ -310,12 +336,42 @@ export default function GameAnalysis() {
 
   const coachReady = Boolean(appSettings?.coach?.key_set)
   const commentedPlies = Object.keys(coachNotes ?? {}).length
+  // Moves of the user's own that carry no comment yet. A run that half failed
+  // leaves some, and finishing those is a different action from paying for the
+  // whole game again - so the button says which one it is.
+  const missing = moves.filter(
+    (move) => move.color === userColor && move.move && !coachNotes?.[move.ply],
+  ).length
+  const resume = missing > 0
 
+  /**
+   * Hand the game to the coach — to the service when there is one.
+   *
+   * The background path is preferred wherever it exists, because it is the
+   * only one that survives the phone going in a pocket: Android freezes a
+   * backgrounded WebView, so the in-app loop below stops the moment the app
+   * does. In a browser, and in the tests, there is no service and the loop is
+   * still the whole feature.
+   */
   async function askCoach() {
     setCoachBusy(true)
     setCoachStatus(null)
     try {
+      const { available, needsPermission } = await api.coachRunner()
+      if (available) {
+        // Denied, the service still runs and finishes; it simply cannot say
+        // so, which is the reason to run it there at all.
+        if (needsPermission) await api.requestCoachNotifications().catch(() => {})
+        const started = await api.coachGameBackground(gameId, { resume })
+        setCoachWaiting(true)
+        setCoachStatus(
+          `Le coach écrit en arrière-plan (${started.chunks} lot(s)). ` +
+            'Vous pouvez quitter l’application : une notification préviendra quand c’est prêt.',
+        )
+        return
+      }
       const result = await api.coachGame(gameId, {
+        resume,
         onProgress: (done, total) => setCoachStatus(`Rédaction… ${done}/${total}`),
         // A pause with no explanation reads as a frozen button, and this one
         // can last half a minute.
@@ -598,9 +654,11 @@ export default function GameAnalysis() {
                   >
                     {coachBusy
                       ? 'Le coach écrit…'
-                      : commentedPlies
-                        ? 'Refaire commenter la partie'
-                        : 'Faire commenter par le coach'}
+                      : !commentedPlies
+                        ? 'Faire commenter par le coach'
+                        : resume
+                          ? `Compléter (${missing} coup${missing > 1 ? 's' : ''} sans commentaire)`
+                          : 'Refaire commenter la partie'}
                   </Button>
                 ) : (
                   <Button size="sm" variant="ghost" icon="coach" to="/settings">

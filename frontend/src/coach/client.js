@@ -52,6 +52,75 @@ const MAX_RETRIES = 2;
 export class CoachError extends Error {}
 
 /**
+ * The providers to try, in order: the one chosen, then every other one a key
+ * is stored for. Nothing is sent to the second until the first has run out of
+ * retries — a spare wheel, not a race.
+ */
+export function providerChain(config) {
+  return [
+    { provider: config.provider, model: config.model, apiKey: config.apiKey },
+    ...(config.fallbacks ?? []).filter((entry) => entry.apiKey),
+  ];
+}
+
+/**
+ * Every request a game would make, built but not sent.
+ *
+ * This is what lets the work leave the WebView. Android freezes a backgrounded
+ * WebView, so "start it and put the phone away" means the posting has to
+ * happen in a native foreground service — and the one thing that service must
+ * not contain is judgment. So the chess, the digest, the prompt, the provider
+ * shapes and the fallback order are all resolved here, into a list of chunks
+ * each carrying its ordered attempts, and what crosses to Java is a URL, some
+ * headers and a string of bytes.
+ *
+ * `skipPlies` is what a resumed run passes: a chunk whose moves are already
+ * commented is not rebuilt, so finishing a commentary that half failed does
+ * not pay for the half that worked.
+ */
+export function planGame({ game, analysis, config, skipPlies = [] }) {
+  if (!config?.apiKey) throw new CoachError("Aucune clé API renseignée.");
+  const done = new Set(skipPlies.map(Number));
+  const chain = providerChain(config);
+
+  return buildDigest({ game, analysis })
+    .filter(({ plies }) => !plies.every((ply) => done.has(ply)))
+    .map(({ plies, text }) => ({
+      plies,
+      attempts: chain.map(({ provider, model, apiKey }) => {
+        const adapter = providerFor(provider);
+        const { url, headers, data } = adapter.request({
+          apiKey,
+          model: model || adapter.models[0],
+          system: SYSTEM_PROMPT,
+          user: text,
+          maxTokens: adapter.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
+        });
+        // A string, not an object: the carrier writes bytes and is not asked
+        // to have an opinion about JSON.
+        return { provider, url, headers, body: JSON.stringify(data) };
+      }),
+    }));
+}
+
+/**
+ * One answer that came back from somewhere else, turned into notes.
+ *
+ * The mirror of `planGame`: the service stores raw bodies, and every
+ * provider-shaped decision — which field holds the text, is it wrapped in a
+ * fence, is this ply one we asked about — is made back here, against the same
+ * `validate` the foreground path uses.
+ */
+export function readChunk({ provider, status, body, plies }) {
+  const adapter = providerFor(provider);
+  const parsed = typeof body === "string" ? safeParse(body) : body;
+  if (status >= 400 || parsed === null) {
+    throw new CoachError(adapter.error?.(parsed) ?? `Le modèle a répondu ${status}`);
+  }
+  return validate(extractJson(adapter.text(parsed)), plies);
+}
+
+/**
  * The instructions, which are mostly a list of things not to do.
  *
  * A model handed a chess position will produce plausible chess prose whether
@@ -235,19 +304,25 @@ export function createCoach(http, { sleep, now } = {}) {
      *   chunks each provider answered, so a screen can say what was spent
      *   where rather than only that something was.
      */
-    async commentGame({ game, analysis, config, onProgress, onWait, onFallback }) {
+    async commentGame({
+      game,
+      analysis,
+      config,
+      skipPlies = [],
+      onProgress,
+      onWait,
+      onFallback,
+      onChunk,
+    }) {
       if (!config?.apiKey) throw new CoachError("Aucune clé API renseignée.");
 
-      const chunks = buildDigest({ game, analysis });
+      const done = new Set(skipPlies.map(Number));
+      const chunks = buildDigest({ game, analysis }).filter(
+        ({ plies }) => !plies.every((ply) => done.has(ply)),
+      );
       if (!chunks.length) throw new CoachError("Cette partie n’a aucun coup à commenter.");
 
-      // The provider asked first, then every other one a key is stored for.
-      // Nothing is sent anywhere until the one before it has run out of
-      // retries: this is a spare wheel, not a race.
-      const chain = [
-        { provider: config.provider, model: config.model, apiKey: config.apiKey },
-        ...(config.fallbacks ?? []).filter((entry) => entry.apiKey),
-      ];
+      const chain = providerChain(config);
 
       // A window per provider, per call. Per provider because their limits are
       // separate counters; per call because the coach is only ever driven from
@@ -271,7 +346,12 @@ export function createCoach(http, { sleep, now } = {}) {
         try {
           const { answer, provider } = await send({ chain, user: text, limiters, onWait, onFallback });
           used[provider] = (used[provider] ?? 0) + 1;
-          Object.assign(notes, validate(extractJson(answer), plies));
+          const written = validate(extractJson(answer), plies);
+          Object.assign(notes, written);
+          // Handed over as it arrives, so leaving the screen costs at most the
+          // chunk in flight. A commentary written and then lost to a phone
+          // call was paid for twice.
+          await onChunk?.(written);
         } catch (error) {
           // One refused chunk must not cost the moves an earlier one already
           // produced. A key that is wrong fails on the first chunk and then on

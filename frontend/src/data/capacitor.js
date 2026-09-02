@@ -23,6 +23,15 @@ export const DATABASE_NAME = "chess-analyzer";
 export const Stockfish = registerPlugin("Stockfish");
 
 /**
+ * The foreground service that posts the coach's requests.
+ *
+ * Also registered in MainActivity. On the web this proxy exists but every call
+ * rejects, which is what `api.coachRunner()` reads to decide whether the
+ * background path is available at all.
+ */
+export const CoachRunner = registerPlugin("CoachRunner");
+
+/**
  * Adapt @capacitor-community/sqlite to the Driver contract.
  *
  * The contract was shaped after this plugin's own methods, so the adapting is
@@ -90,6 +99,7 @@ export async function createApp({ threads = 1, hashMb = 128, settings } = {}) {
     client,
     engine,
     coach,
+    runner: CoachRunner,
     settings,
     evaluate: engine.evaluate,
     async close() {

@@ -115,6 +115,11 @@ repositories {
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    // Named rather than inherited through appcompat: CoachService builds its
+    // notification with NotificationCompat and starts itself with
+    // ContextCompat, and a transitive dependency that stops being exposed is a
+    // build that breaks for a reason nothing in this file mentions.
+    implementation "androidx.core:core:$androidxCoreVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')

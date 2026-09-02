@@ -9,8 +9,10 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // App-local plugins are not discovered the way installed ones are, so
-        // this registration is what makes `Stockfish` reachable from JS.
+        // these registrations are what make `Stockfish` and `CoachRunner`
+        // reachable from JS.
         registerPlugin(StockfishPlugin.class);
+        registerPlugin(CoachPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

@@ -65,6 +65,12 @@ vi.mock("../utils/api", () => {
         },
       },
     })),
+    // No foreground service in a browser, which is the case every test here
+    // renders: the in-app loop is still the whole feature without one.
+    coachRunner: vi.fn(async () => ({ available: false })),
+    coachGameBackground: vi.fn(async () => ({ started: true, jobId: "job-1", chunks: 2 })),
+    requestCoachNotifications: vi.fn(async () => ({ notifications: "granted" })),
+    collectCoachResults: vi.fn(async () => ({ games: [] })),
     coachGame: vi.fn(async () => ({
       notes: { 3: "Ta dame sort trop tôt : elle sera chassée avec gain de temps." },
       added: 1,
@@ -415,7 +421,7 @@ function renderApp(route = "/") {
 // test installed, so one `mockResolvedValue` would quietly follow the suite
 // around. Anything a test overrides has to be put back here.
 const DEFAULTS = new Map(
-  ["gamesPage", "settings", "health", "insights", "game", "evaluate"].map((name) => [
+  ["gamesPage", "settings", "health", "insights", "game", "evaluate", "coachRunner"].map((name) => [
     name,
     api[name].getMockImplementation(),
   ]),
@@ -1178,6 +1184,36 @@ describe("the coach", () => {
     const field = document.querySelector('input[type="password"]');
     expect(field.value).toBe("");
     expect(screen.getByRole("button", { name: /Oublier la clé/ })).toBeDefined();
+  });
+
+  /**
+   * The reason the service exists: Android freezes a backgrounded WebView, so
+   * the in-app loop stops the moment the phone goes in a pocket. Where there
+   * is a service, the button hands the game to it and says so.
+   */
+  it("hands the game to the service when the phone has one", async () => {
+    api.coachRunner.mockResolvedValue({ available: true, needsPermission: true });
+    api.settings.mockResolvedValue({
+      chess_com_username: "maxime",
+      last_synced_at: null,
+      engine_depth: 18,
+      coach: {
+        provider: "gemini",
+        model: "gemini-3.7-flash",
+        key_set: true,
+        fallback: true,
+        keys: { gemini: true, openrouter: false, anthropic: false },
+      },
+    });
+    renderApp("/games/1");
+
+    fireEvent.click(await screen.findByRole("button", { name: /Faire commenter par le coach/ }));
+    await waitFor(() => expect(api.coachGameBackground).toHaveBeenCalled());
+    // The notification is the point of running it there, and on Android 13+
+    // it needs asking for.
+    expect(api.requestCoachNotifications).toHaveBeenCalled();
+    expect(api.coachGame).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Vous pouvez quitter l’application/)).toBeDefined();
   });
 
   // "Combien ça me couterait" is not answerable from "$25 per million output
