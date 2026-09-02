@@ -145,3 +145,32 @@ export async function respondTo({ evaluate, before, after, color, bestBefore, li
     outcome: applied ? outcomeOf(applied.fen) : ended,
   };
 }
+
+/**
+ * The engine plays, without a move of the user's to judge first.
+ *
+ * `respondTo` covers the rally: you move, it answers. This covers the opening
+ * of one - taking over a position where it is not your turn, which is the
+ * ordinary case on the analysis screen, because the board there shows the
+ * position *after* the move being looked at. Without this the board sat on
+ * "position à l'adversaire" with nothing able to move it: the engine was only
+ * ever asked in response to a move the user could not make.
+ */
+export async function engineMove({ evaluate, fen, limit }) {
+  const search = { ...SPARRING_LIMIT, ...(limit ?? {}) };
+
+  const ended = outcomeOf(fen);
+  if (ended.over) return { evaluation: null, reply: null, outcome: ended };
+
+  const evaluation = await evaluate(fen, search);
+  const uci = evaluation?.best_uci ?? null;
+  const applied = uci
+    ? applyMove(fen, uci.slice(0, 2), uci.slice(2, 4), uci.slice(4) || "q")
+    : null;
+
+  return {
+    evaluation,
+    reply: applied ? { ...applied.move, fen: applied.fen, uci } : null,
+    outcome: applied ? outcomeOf(applied.fen) : ended,
+  };
+}

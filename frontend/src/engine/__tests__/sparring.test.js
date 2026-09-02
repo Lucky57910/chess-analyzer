@@ -17,6 +17,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   applyMove,
+  engineMove,
   judgeMove,
   legalDests,
   outcomeOf,
@@ -271,6 +272,53 @@ describe("respondTo", () => {
     const result = await respondTo({ evaluate, before: START, after: afterE4, color: "white" });
     expect(result.reply).toBe(null);
     expect(result.verdict).not.toBe(null);
+  });
+});
+
+describe("engineMove", () => {
+  const afterE4 = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1";
+  const afterE5 = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 2";
+
+  // The case the screen actually starts from: "Jouer d'ici" is pressed while
+  // looking at a move that has just been played, so the position handed over
+  // belongs to the other side. Nothing else in this module asks the engine
+  // without a move of the user's to judge first.
+  it("plays the position handed to it", async () => {
+    const evaluate = recorded({ [afterE4]: { cp: 30, best_uci: "e7e5" } });
+    const result = await engineMove({ evaluate, fen: afterE4 });
+
+    expect(evaluate).toHaveBeenCalledTimes(1);
+    expect(result.reply.san).toBe("e5");
+    expect(result.reply.fen).toBe(afterE5);
+    expect(result.outcome.over).toBe(false);
+  });
+
+  it("does not ask the engine about a finished game", async () => {
+    const evaluate = recorded({});
+    const mated = "rnb1kbnr/pppp1ppp/8/4p3/6Pq/5P2/PPPPP2P/RNBQKBNR w KQkq - 1 3";
+    const result = await engineMove({ evaluate, fen: mated });
+
+    expect(evaluate).not.toHaveBeenCalled();
+    expect(result.outcome).toMatchObject({ over: true, reason: "checkmate" });
+    expect(result.reply).toBe(null);
+  });
+
+  it("survives an engine that names no move", async () => {
+    const evaluate = recorded({ [afterE4]: { cp: 30, best_uci: null } });
+    const result = await engineMove({ evaluate, fen: afterE4 });
+
+    expect(result.reply).toBe(null);
+    expect(result.outcome.over).toBe(false);
+  });
+
+  it("reports the mate it walks into", async () => {
+    // Black to move, mate in one on h4.
+    const before = "rnbqkbnr/pppp1ppp/8/4p3/6P1/5P2/PPPPP2P/RNBQKBNR b KQkq - 0 2";
+    const evaluate = recorded({ [before]: { cp: -9998, mate: -1, best_uci: "d8h4" } });
+    const result = await engineMove({ evaluate, fen: before });
+
+    expect(result.reply.san).toBe("Qh4#");
+    expect(result.outcome).toMatchObject({ over: true, reason: "checkmate", winner: "black" });
   });
 });
 
