@@ -270,6 +270,53 @@ export function createGameStore(repo) {
       );
     },
 
+    /**
+     * Take back the games left mid-analysis, so the queue can finish them.
+     *
+     * `running` means "a runner is on it", and there is exactly one runner,
+     * which only exists while the app is in the foreground. So a row still
+     * marked running when nothing is draining the queue was interrupted - the
+     * app was closed, the phone killed it, the screen was left - and nothing
+     * would ever pick it up again: `nextPending` looks for `pending`. That is
+     * how ten games sat "en analyse" from one week to the next.
+     *
+     * The attempt already charged stays charged. It is the only guard against
+     * a game that reliably kills the app being retried until the end of time,
+     * and a game that has spent them all is retired here with a reason, rather
+     * than being handed back to a queue that will not touch it and displayed
+     * as though something were still working on it.
+     *
+     * @returns {Promise<{requeued: number, retired: number}>}
+     */
+    async reclaimRunning() {
+      const stuck = await repo.all(
+        "SELECT id, analysis_attempts FROM games WHERE analysis_status = 'running'",
+      );
+      if (!stuck.length) return { requeued: 0, retired: 0 };
+
+      const retired = stuck.filter((g) => g.analysis_attempts >= MAX_ANALYSIS_ATTEMPTS);
+      const requeued = stuck.filter((g) => g.analysis_attempts < MAX_ANALYSIS_ATTEMPTS);
+
+      if (requeued.length) {
+        await repo.run(
+          `UPDATE games SET analysis_status = 'pending'
+            WHERE analysis_status = 'running' AND analysis_attempts < ?`,
+          [MAX_ANALYSIS_ATTEMPTS],
+        );
+      }
+      if (retired.length) {
+        await repo.run(
+          `UPDATE games SET analysis_status = 'error', analysis_error = ?
+            WHERE analysis_status = 'running' AND analysis_attempts >= ?`,
+          [
+            "Analyse interrompue trop de fois. Relancez-la depuis la partie.",
+            MAX_ANALYSIS_ATTEMPTS,
+          ],
+        );
+      }
+      return { requeued: requeued.length, retired: retired.length };
+    },
+
     async markRunning(id) {
       await repo.run(
         "UPDATE games SET analysis_status = 'running', analysis_attempts = analysis_attempts + 1 WHERE id = ?",

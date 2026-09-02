@@ -45,8 +45,21 @@ export function QueueProvider({ children }) {
     }
   }, []);
 
+  // Once, on opening: a pass interrupted by the app closing leaves its game
+  // marked running, and nothing else would ever hand it back. Doing it before
+  // the first status read is what keeps the badge honest - otherwise the
+  // screen says "en analyse" about a runner that no longer exists.
   useEffect(() => {
-    refreshStatus();
+    (async () => {
+      try {
+        const { api } = await getApi();
+        await api.reclaimStuck();
+      } catch {
+        // A database that will not answer here will say so on the next call;
+        // failing to tidy up is not a reason to refuse to show the queue.
+      }
+      refreshStatus();
+    })();
   }, [refreshStatus]);
 
   const start = useCallback(async () => {

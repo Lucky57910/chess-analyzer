@@ -191,6 +191,17 @@ export function createApi({ repo, store, sync, engine, coach, settings = DEFAULT
       return { notes: stored, added: Object.keys(notes).length, failed };
     },
 
+    /**
+     * Hand back the games an interrupted pass left marked as running.
+     *
+     * Called once when the app opens, so the queue counts on screen describe
+     * what is actually going to happen rather than a runner that died with the
+     * process. `runQueue` does it again for itself.
+     */
+    async reclaimStuck() {
+      return store.reclaimRunning();
+    },
+
     /** Put a game back at the front of the queue. */
     async refresh(id) {
       await store.requeue(id);

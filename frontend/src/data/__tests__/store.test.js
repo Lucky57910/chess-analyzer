@@ -261,6 +261,41 @@ describe("the queue", () => {
     expect(await ctx.store.nextStale(8)).toBeNull();
   });
 
+  // The bug this exists for: the app is closed while Stockfish is working, the
+  // row stays 'running', and nothing looks at 'running' ever again. Ten games
+  // sat like that for weeks, displayed as "en analyse".
+  it("takes back a game an interrupted pass left running", async () => {
+    const game = await ctx.store.nextPending();
+    await ctx.store.markRunning(game.id);
+
+    expect(await ctx.store.nextPending()).not.toMatchObject({ id: game.id });
+    expect(await ctx.store.reclaimRunning()).toEqual({ requeued: 1, retired: 0 });
+    expect((await ctx.store.nextPending()).id).toBe(game.id);
+  });
+
+  // The attempt stays charged, or a game that reliably kills the app is
+  // retried until the end of time.
+  it("keeps the attempt it charged when it takes a game back", async () => {
+    const game = await ctx.store.nextPending();
+    await ctx.store.markRunning(game.id);
+    await ctx.store.reclaimRunning();
+    expect((await ctx.store.get(game.id)).analysis_attempts).toBe(1);
+  });
+
+  it("retires a game that has spent its attempts, with a reason", async () => {
+    const game = await ctx.store.nextPending();
+    for (let i = 0; i < MAX_ANALYSIS_ATTEMPTS; i += 1) await ctx.store.markRunning(game.id);
+
+    expect(await ctx.store.reclaimRunning()).toEqual({ requeued: 0, retired: 1 });
+    const stored = await ctx.store.get(game.id);
+    expect(stored.analysis_status).toBe("error");
+    expect(stored.analysis_error).toMatch(/interrompue/);
+  });
+
+  it("leaves a queue with nothing running alone", async () => {
+    expect(await ctx.store.reclaimRunning()).toEqual({ requeued: 0, retired: 0 });
+  });
+
   it("counts what is left to do", async () => {
     await ctx.store.saveAnalysis(1, analysisResult({ engine_depth: 8 }));
     await ctx.store.markFailed(2, "boom");
@@ -306,6 +341,27 @@ describe("sync", () => {
     expect(result.skipped).toBe(entries.length - ROWS.length);
     expect(result.skipped).toBeGreaterThan(0);
     expect(await ctx.repo.getSetting("last_synced_at")).toBeTruthy();
+  });
+
+  // The queue is the only runner, and it only exists in the foreground: a row
+  // still marked running when a pass starts was interrupted, and the pass has
+  // to take it back or nobody will.
+  it("takes back an interrupted game before draining the queue", async () => {
+    await ctx.store.upsertMany(ROWS.slice(0, 1));
+    const game = await ctx.store.nextPending();
+    await ctx.store.markRunning(game.id);
+
+    const sync = createSync({
+      repo: ctx.repo,
+      store: ctx.store,
+      client: fakeClient([]),
+      // Enough for analysePgn to walk the game: one flat evaluation per
+      // position, which judges every move as costing nothing.
+      evaluate: async () => ({ cp: 0, mate: null, best_uci: null, pv: [], depth: 12 }),
+    });
+
+    expect(await sync.runQueue({ max: 1 })).toBe(1);
+    expect((await ctx.store.get(game.id)).analysis_status).toBe("done");
   });
 
   it("does nothing at all without a username", async () => {

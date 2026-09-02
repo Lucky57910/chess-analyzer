@@ -113,6 +113,11 @@ export function createSync({ repo, store, client, evaluate, settings = DEFAULT_S
      * looking at.
      */
     async runQueue({ signal, onGame, onProgress, max = Infinity } = {}) {
+      // Anything still marked running belongs to a pass that was interrupted -
+      // there is one runner and it is this one. Taking those back before the
+      // loop starts is what stops a game killed mid-analysis from sitting in
+      // "en analyse" for good.
+      await store.reclaimRunning();
       let processed = 0;
       while (processed < max) {
         if (signal?.aborted) break;
