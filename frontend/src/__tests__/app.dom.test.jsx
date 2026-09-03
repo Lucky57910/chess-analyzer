@@ -923,6 +923,9 @@ describe("explaining a move with the engine's own line", () => {
     for (let i = 0; i < 3; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(await screen.findByText(/L’adversaire enchaîne/)).toBeDefined();
     expect(await screen.findByText(/Il fallait jouer/)).toBeDefined();
+    // Three presses, three plies. It used to be "three presses, as many plies
+    // as React managed to render in between".
+    expect(screen.getByText(/^3 \/ 4 /)).toBeDefined();
     // The moves inside both sentences are buttons, not text: this is the line
     // the reader can walk rather than replay in their head. Scoped to the
     // bubble, because the move list beside the board carries the same names.
@@ -941,6 +944,9 @@ describe("explaining a move with the engine's own line", () => {
     await screen.findByRole("button", { name: /meilleur coup/ });
 
     for (let i = 0; i < 3; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
+    // Wait for the bubble to be describing ply 3 before reaching into it: the
+    // variation only exists on the judged move.
+    await screen.findByText(/L’adversaire enchaîne/);
     const bubble = within(screen.getByLabelText("Commentaire du coach"));
     fireEvent.click(bubble.getAllByRole("button", { name: "Nc6" })[0]);
 
@@ -967,6 +973,7 @@ describe("explaining a move with the engine's own line", () => {
     await screen.findByRole("button", { name: /meilleur coup/ });
 
     for (let i = 0; i < 3; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
+    await screen.findByText(/L’adversaire enchaîne/);
     const walkable = within(screen.getByLabelText("Commentaire du coach"));
     fireEvent.click(walkable.getAllByRole("button", { name: "Nc6" })[0]);
     expect(await screen.findByText("Les noirs jouent Nc6.")).toBeDefined();

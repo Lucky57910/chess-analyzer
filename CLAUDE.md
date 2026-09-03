@@ -162,6 +162,16 @@ model, writing from those two). They were one grey list, which made "ton roi
 reste au centre" look exactly like "ce coup cloue le cavalier". The avatar and
 the header name the author of the paragraph; each supporting line is tagged.
 
+**Walking the game is a delta, not an arithmetic on `ply`.** A key handler that
+computed `ply + 1` from the render it was registered in advanced by one move
+for a burst of presses that arrived before React re-rendered - two taps, one
+move on a phone, and an intermittently red DOM suite on a loaded machine.
+`stepPly` and `stepVariationBy` take a delta and read the current value inside
+the updater; `goTo` stays absolute, for the move list and the graph, which name
+a ply rather than a direction. The handlers read whether a line is open from
+`variationRef`, so a swipe landing in the same tick as the tap that opened one
+is not answered by the state before it.
+
 **A variation is state of its own, never a ply.** `narrate` hands the steps
 over as well as the sentence, so a line can be walked on the board instead of
 replayed in the reader's head - and every step already carries the position it

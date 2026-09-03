@@ -133,6 +133,11 @@ export default function GameAnalysis() {
    * than a value of `ply`: everything that moves the game clears it.
    */
   const [variation, setVariation] = useState(null)
+  // Read by the key and swipe handlers. A listener registered in one render
+  // would otherwise decide "is a line open" from the render it was registered
+  // in, which is a frame behind the tap that opened it.
+  const variationRef = useRef(null)
+  variationRef.current = variation
   // The coach's own state. `coachNotes` shadows what the analysis carried so a
   // freshly generated commentary appears without reloading the game.
   const [coachNotes, setCoachNotes] = useState(null)
@@ -258,15 +263,35 @@ export default function GameAnalysis() {
     return found
   }, [cache, moves, ply])
 
+  const clamp = useCallback((next) => Math.max(0, Math.min(moves.length, next)), [moves.length])
+
+  /** Jump to a ply named by something else: the move list, the graph, a mistake. */
   const goTo = useCallback(
     (next) => {
       // Moving in the game leaves the variation. A line is read against the
       // position it starts from; carrying it onto the next ply would draw the
       // engine's answer to a question nobody asked there.
       setVariation(null)
-      setPly(Math.max(0, Math.min(moves.length, next)))
+      setPly(clamp(next))
     },
-    [moves.length],
+    [clamp],
+  )
+
+  /**
+   * Walk the game, read from wherever it is rather than from where it was.
+   *
+   * The functional update is the whole point. An arrow key that computed
+   * `ply + 1` from the render it was registered in advanced by one for a burst
+   * of presses that arrived before React had re-rendered - two taps, one move -
+   * and the same race made the tests intermittent on a loaded machine. Nothing
+   * here reads `ply`, so nothing here can read a stale one.
+   */
+  const stepPly = useCallback(
+    (delta) => {
+      setVariation(null)
+      setPly((current) => clamp(current + delta))
+    },
+    [clamp],
   )
 
   /**
@@ -279,6 +304,17 @@ export default function GameAnalysis() {
   const stepVariation = useCallback((next) => {
     setVariation((current) => {
       if (!current) return current
+      if (next < 0) return null
+      if (next > current.steps.length - 1) return current
+      return { ...current, index: next }
+    })
+  }, [])
+
+  /** The same, by a number of plies, for a key or a swipe. */
+  const stepVariationBy = useCallback((delta) => {
+    setVariation((current) => {
+      if (!current) return current
+      const next = current.index + delta
       if (next < 0) return null
       if (next > current.steps.length - 1) return current
       return { ...current, index: next }
@@ -313,11 +349,13 @@ export default function GameAnalysis() {
     touchStart.current = null
     if (!start) return
     if (Math.abs(start.dx) < SWIPE_MIN_PX || Math.abs(start.dx) <= Math.abs(start.dy)) return
-    const forward = start.dx < 0
-    // The same gesture, applied to whatever the board is currently showing.
-    if (variation) stepVariation(variation.index + (forward ? 1 : -1))
-    else goTo(forward ? ply + 1 : ply - 1)
-  }, [goTo, ply, stepVariation, variation])
+    const delta = start.dx < 0 ? 1 : -1
+    // The same gesture, applied to whatever the board is currently showing -
+    // read from the ref, so a swipe that lands in the same tick as the tap that
+    // opened a line is not answered by the state the screen had before it.
+    if (variationRef.current) stepVariationBy(delta)
+    else stepPly(delta)
+  }, [stepPly, stepVariationBy])
 
   const onTouchCancel = useCallback(() => {
     touchStart.current = null
@@ -327,16 +365,16 @@ export default function GameAnalysis() {
     function onKey(e) {
       // While a line is open the arrows walk it, because that is what is on
       // the board. Escape is the way out that needs no button.
-      if (variation) {
-        if (e.key === 'ArrowLeft') stepVariation(variation.index - 1)
-        else if (e.key === 'ArrowRight') stepVariation(variation.index + 1)
+      if (variationRef.current) {
+        if (e.key === 'ArrowLeft') stepVariationBy(-1)
+        else if (e.key === 'ArrowRight') stepVariationBy(1)
         else if (e.key === 'Escape') setVariation(null)
         else return
         e.preventDefault()
         return
       }
-      if (e.key === 'ArrowLeft') goTo(ply - 1)
-      else if (e.key === 'ArrowRight') goTo(ply + 1)
+      if (e.key === 'ArrowLeft') stepPly(-1)
+      else if (e.key === 'ArrowRight') stepPly(1)
       else if (e.key === 'ArrowUp') goTo(0)
       else if (e.key === 'ArrowDown') goTo(moves.length)
       else return
@@ -344,7 +382,7 @@ export default function GameAnalysis() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [ply, goTo, moves.length, stepVariation, variation])
+  }, [goTo, moves.length, stepPly, stepVariationBy])
 
   useEffect(() => {
     if (!playing) return undefined
@@ -642,7 +680,7 @@ export default function GameAnalysis() {
                   variant="ghost"
                   icon="previous"
                   aria-label="Coup précédent"
-                  onClick={() => goTo(ply - 1)}
+                  onClick={() => stepPly(-1)}
                   disabled={ply === 0}
                 />
                 <Button
@@ -658,7 +696,7 @@ export default function GameAnalysis() {
                   variant="ghost"
                   icon="next"
                   aria-label="Coup suivant"
-                  onClick={() => goTo(ply + 1)}
+                  onClick={() => stepPly(1)}
                   disabled={ply >= moves.length}
                 />
                 <Button
