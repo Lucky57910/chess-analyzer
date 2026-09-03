@@ -227,6 +227,10 @@ export function createApi({ repo, store, sync, engine, coach, runner, settings =
       if (!ready) throw new ApiError(409, reason);
 
       const digest = buildReview({
+        // The games as well as the aggregates: the review cuts the archive in
+        // half by date and computes the headline numbers on each side, which
+        // is the only way it can tell a weakness from one already corrected.
+        games,
         stats,
         insights: computeInsights(games),
         themes: tacticalThemes(games),

@@ -15,10 +15,14 @@ import {
   MAX_DETAIL_CHARS,
   MAX_FINDINGS,
   MIN_GAMES,
+  MIN_HALF_GAMES,
   archiveFacts,
   buildReview,
+  evolutionFacts,
   reviewReadiness,
+  splitByRecency,
   tacticalThemes,
+  trendText,
   validateReview,
 } from "../review.js";
 
@@ -97,6 +101,88 @@ describe("what the archive is allowed to say", () => {
     expect(digest.text).toMatch(/piece\.Q \| coups de dame/);
     // The player's games are never in it - only numbers computed from them.
     expect(digest.text).not.toMatch(/1\. e4/);
+  });
+});
+
+/**
+ * A player whose opening used to leak and does not any more.
+ *
+ * Built as accuracy alone, which is enough: `computeStats` reads the analysis
+ * summary off each game, and what these tests are about is whether the two
+ * halves are compared at all.
+ */
+function played(n, { from, accuracy, acpl, opening = "French Defense", losses = [] }) {
+  return Array.from({ length: n }, (_, i) => ({
+    id: `${from + i}`,
+    user_color: "white",
+    result: "win",
+    opening,
+    end_time: from + i * 86_400,
+    played_at: new Date((from + i * 86_400) * 1000).toISOString(),
+    analysis: {
+      accuracy_white: accuracy,
+      accuracy_black: 70,
+      acpl_white: acpl,
+      acpl_black: 60,
+      judgment_counts: { white: {}, black: {} },
+      moves: losses.map((cp_loss, ply) => ({
+        ply: ply + 1,
+        move_number: ply + 1,
+        color: "white",
+        san: "e4",
+        cp_loss,
+        judgment: null,
+        phase: "opening",
+      })),
+    },
+  }));
+}
+
+describe("telling a weakness from one that has been fixed", () => {
+  const OLD = played(10, { from: 1_600_000_000, accuracy: 62, acpl: 70, losses: [90, 80, 70] });
+  const NEW = played(10, { from: 1_700_000_000, accuracy: 82, acpl: 25, losses: [12, 10, 14] });
+
+  it("says which way a number moved rather than leaving the model to guess", () => {
+    // Lower is better for centipawns and worse for accuracy. A model reading
+    // "70 puis 25" unaided congratulates you on a collapse half the time.
+    expect(trendText("cp", 70, 25)).toMatch(/en progrès/);
+    expect(trendText("cp", 25, 70)).toMatch(/en recul/);
+    expect(trendText("précision", 70, 80, { higherIsBetter: true })).toMatch(/en progrès/);
+    // Within a tenth: two samples of the same thing, not a trend.
+    expect(trendText("cp", 100, 95)).toMatch(/stable/);
+  });
+
+  it("compares the two halves of the archive", () => {
+    const facts = evolutionFacts(splitByRecency([...OLD, ...NEW]));
+    const text = facts.map((f) => f.text).join(" | ");
+
+    expect(keysOf(facts)).toContain("evolution.precision");
+    expect(text).toMatch(/précision moyenne : 62 % sur la première moitié, 82 % sur la seconde \(en progrès\)/);
+    // The opening that was leaking and is not any more, with both counts, so
+    // "corrigé" can be said instead of held against the player for ever.
+    expect(text).toMatch(/French Defense.*en progrès.*10 parties puis 10/);
+  });
+
+  it("says nothing about a trend it cannot support", () => {
+    // One half too small to be a half. Two averages over four games each is
+    // not a before and an after.
+    expect(splitByRecency(played(2 * MIN_HALF_GAMES - 1, { from: 1, accuracy: 70, acpl: 40 }))).toBe(
+      null,
+    );
+    expect(evolutionFacts(null)).toEqual([]);
+  });
+
+  it("puts them in the digest, where the flat averages cannot say it", () => {
+    const digest = buildReview({
+      games: [...OLD, ...NEW],
+      stats: STATS,
+      insights: INSIGHTS,
+      themes: null,
+    });
+    expect(digest.keys).toContain("evolution.acpl");
+    // And the whole-window facts are still there: "ton milieu de partie reste
+    // le point faible, ton ouverture s’est corrigée" needs both.
+    expect(digest.keys).toContain("phase.middlegame");
   });
 });
 

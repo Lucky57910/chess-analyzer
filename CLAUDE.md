@@ -8,7 +8,7 @@ there is no server and no other package.
 Run these from `frontend/`.
 
 ```bash
-npm test           # vitest, 555 tests, no device needed
+npm test           # vitest, 559 tests, no device needed
 npm run lint       # oxlint
 npm run build      # vite
 npm run dev        # browser, for layout work only
@@ -202,6 +202,19 @@ token on per-move comments gets the same review as one who has. What it needs
 is *analysis* coverage and a denominator: facts below their minimum
 (`MIN_PIECE_MOVES`, `MIN_OPENING_GAMES`, …) are never sent, so there is nothing
 to over-read — twelve games of an opening is not a repertoire problem.
+
+**An average cannot see a fix.** Every whole-window number keeps a corrected
+weakness alive for ever: an opening that leaked for the first thirty games
+stays in the mean, and the coach goes on telling you about it. So `review.js`
+also cuts the archive in half by date and sends the same headline numbers for
+each side as `evolution.*` facts, and the prompt says not to reproach what
+those show as `en progrès`. Two details are load-bearing: the halves are cut by
+game *count*, not by a number of days, because someone who played two hundred
+games in a fortnight has empty calendar windows and a perfectly good archive;
+and the *direction* is computed in `trendText` rather than left to the model,
+because lower is better for centipawns and worse for accuracy, and a model
+reading "70 puis 25" unaided congratulates you on a collapse about half the
+time.
 
 **Widening the fact base is still the only way to make it better.** "Tu as du
 mal avec les menaces lointaines du fou" needed `motifs.js` to record *who*
