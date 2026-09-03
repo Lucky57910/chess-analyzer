@@ -200,6 +200,65 @@ export function createApi({ repo, store, sync, engine, coach, runner, settings =
     },
 
     /**
+     * Ask the coach to look at everything at once.
+     *
+     * The per-move commentary answers "what was wrong with this move". This
+     * answers the question that only the archive can: what keeps costing
+     * points, across hundreds of games — an opening that is bleeding
+     * centipawns, a piece that keeps being taken from the other side of the
+     * board, a fourth game of the evening that is reliably worse than the
+     * first.
+     *
+     * One pass over the archive, one request. It reads the *engine's*
+     * analysis, never the coach's own prose, so a player who has never
+     * generated a single per-move comment gets exactly the same review — and
+     * every claim in the answer has to cite a number that was sent, or it is
+     * dropped.
+     */
+    async coachReview({ kind = "rated", days = null, onWait, onFallback } = {}) {
+      if (!coach) throw new ApiError(503, "Le coach n'est pas disponible sur cet appareil.");
+      const { buildReview, reviewReadiness, tacticalThemes } = await import("../coach/review.js");
+      const { computeStats } = await import("../data/stats.js");
+      const { computeInsights } = await import("../data/insights.js");
+
+      const games = withinDays(await archiveFor(kind), days);
+      const stats = computeStats(games);
+      const { ready, reason } = reviewReadiness(stats);
+      if (!ready) throw new ApiError(409, reason);
+
+      const digest = buildReview({
+        stats,
+        insights: computeInsights(games),
+        themes: tacticalThemes(games),
+        kind,
+        days,
+      });
+
+      const config = await readCoachConfig(repo);
+      const { findings, provider } = await coach.reviewArchive({
+        digest,
+        config,
+        onWait,
+        onFallback,
+      });
+
+      return store.saveReview({
+        gameKind: kind,
+        windowDays: days,
+        games: stats.analysed,
+        provider,
+        findings,
+        facts: digest.facts,
+      });
+    },
+
+    /** The last review written, or null. */
+    latestReview: () => store.latestReview(),
+
+    /** The reviews, newest first: this month's read against last month's. */
+    reviews: (options) => store.reviews(options),
+
+    /**
      * Is there somewhere to run the coach other than this screen?
      *
      * The plugin exists on the device and nowhere else; on the web the proxy

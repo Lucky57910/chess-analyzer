@@ -30,6 +30,7 @@
 
 import { buildDigest } from "./digest.js";
 import { RESPONSE_SCHEMA_HINT, providerFor } from "./providers.js";
+import { REVIEW_PROMPT, validateReview } from "./review.js";
 import { createLimiter, retryDelay } from "./throttle.js";
 
 /** Longest a single comment may be. Two or three sentences. */
@@ -247,12 +248,12 @@ const EXHAUSTED = {
 export function createCoach(http, { sleep, now } = {}) {
   const wait = sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
 
-  async function post({ provider, apiKey, model, user }) {
+  async function post({ provider, apiKey, model, user, system = SYSTEM_PROMPT }) {
     const adapter = providerFor(provider);
     const { url, headers, data } = adapter.request({
       apiKey,
       model: model || adapter.models[0],
-      system: SYSTEM_PROMPT,
+      system,
       user,
       maxTokens: adapter.maxOutputTokens ?? MAX_OUTPUT_TOKENS,
     });
@@ -364,6 +365,45 @@ export function createCoach(http, { sleep, now } = {}) {
 
       return { notes, failed, providers: used };
     },
+
+    /**
+     * Look at the whole archive once, and say what keeps costing points.
+     *
+     * The other method comments a game; this one comments a player. One
+     * request either way — the facts are already aggregates, so there is
+     * nothing to chunk — and the same chain, the same limiter, the same
+     * fallback to a second provider when the free tier is busy.
+     *
+     * What it does *not* share is the validation: a review is checked against
+     * the fact keys it was given rather than against a list of plies. A
+     * finding citing a number that was never sent is the same failure as a
+     * comment on a move that does not exist, and it is dropped the same way.
+     */
+    async reviewArchive({ digest, config, onWait, onFallback }) {
+      if (!config?.apiKey) throw new CoachError("Aucune clé API renseignée.");
+      if (!digest?.facts?.length) throw new CoachError("Pas assez de parties analysées.");
+
+      const chain = providerChain(config);
+      const limiters = new Map(
+        chain.map(({ provider }) => [
+          provider,
+          createLimiter({ rpm: providerFor(provider).rpm ?? 10, now, sleep: wait }),
+        ]),
+      );
+
+      const { answer, provider } = await send({
+        chain,
+        user: digest.text,
+        system: REVIEW_PROMPT,
+        limiters,
+        onWait,
+        onFallback,
+      });
+
+      const findings = validateReview(extractJson(answer), digest.keys);
+      if (!findings.length) throw new CoachError("Le modèle n’a rien renvoyé d’exploitable.");
+      return { findings, provider };
+    },
   };
 
   /**
@@ -377,7 +417,7 @@ export function createCoach(http, { sleep, now } = {}) {
    * in: another provider, same digest, same validation, and the reader cannot
    * tell which one answered.
    */
-  async function send({ chain, user, limiters, onWait, onFallback }) {
+  async function send({ chain, user, system, limiters, onWait, onFallback }) {
     let last = null;
 
     for (const [rank, config] of chain.entries()) {
@@ -386,7 +426,7 @@ export function createCoach(http, { sleep, now } = {}) {
       for (let attempt = 0; ; attempt += 1) {
         await limiters.get(config.provider).take();
         try {
-          return { answer: await post({ ...config, user }), provider: config.provider };
+          return { answer: await post({ ...config, user, system }), provider: config.provider };
         } catch (error) {
           // A refused key or an unparseable answer is not the moment's fault
           // and will fail the same way on every retry and every provider.

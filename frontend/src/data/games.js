@@ -464,6 +464,41 @@ export function createGameStore(repo) {
       return merged;
     },
 
+    /**
+     * Store one review of the whole archive.
+     *
+     * Appended, never updated. A review is what was true on the day it was
+     * written; the reason to keep it is to read it again next month against
+     * what the numbers say then, and a row that gets rewritten cannot do that.
+     */
+    async saveReview({ gameKind = null, windowDays = null, games = 0, provider = null, findings = [], facts = [] }) {
+      await repo.run(
+        `INSERT INTO reviews (created_at, game_kind, window_days, games, provider, findings, facts)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          now(),
+          gameKind,
+          windowDays,
+          games,
+          provider,
+          JSON.stringify(findings),
+          JSON.stringify(facts),
+        ],
+      );
+      return repo.one("SELECT * FROM reviews ORDER BY id DESC LIMIT 1");
+    },
+
+    /** The most recent review, or null when the coach has never been asked. */
+    async latestReview() {
+      const row = await repo.one("SELECT * FROM reviews ORDER BY id DESC LIMIT 1");
+      return row ?? null;
+    },
+
+    /** The reviews, newest first, for reading one against another. */
+    async reviews({ limit = 10 } = {}) {
+      return repo.all("SELECT * FROM reviews ORDER BY id DESC LIMIT ?", [limit]);
+    },
+
     /** Put a game back in the queue for a fresh analysis. */
     async requeue(id) {
       await repo.run(

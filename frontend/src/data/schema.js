@@ -11,7 +11,7 @@
  * repository parses on the way out so callers never see the encoding.
  */
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /**
  * The version handed to the SQLite plugin, which is not our schema version.
@@ -108,6 +108,8 @@ export const JSON_COLUMNS = [
   "judgment_counts",
   "phase_stats",
   "coach",
+  "findings",
+  "facts",
 ];
 
 /**
@@ -177,5 +179,30 @@ export const MIGRATIONS = [
     run: async (driver, { addColumn }) => {
       await addColumn(driver, "analyses", "coach", "TEXT NOT NULL DEFAULT '{}'");
     },
+  },
+  {
+    version: 5,
+    name: "keep what the coach said about the whole archive",
+    // A table rather than a settings row, because the interesting thing about
+    // a review is the one before it: "tu attaques trop vite" is worth reading
+    // again in a month against what it says then. Rows are never updated, only
+    // added - a review is what was true on the day it was written, and
+    // rewriting one would make the history it exists for a lie.
+    //
+    // `facts` is stored beside `findings` on purpose: a finding cites keys,
+    // and without the numbers those keys stood for at the time, an old review
+    // cannot be read back. It is a few hundred bytes.
+    sql: `
+CREATE TABLE IF NOT EXISTS reviews (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at  TEXT NOT NULL,
+  game_kind   TEXT,
+  window_days INTEGER,
+  games       INTEGER NOT NULL DEFAULT 0,
+  provider    TEXT,
+  findings    TEXT NOT NULL DEFAULT '[]',
+  facts       TEXT NOT NULL DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS ix_reviews_created ON reviews (created_at DESC);`,
   },
 ];

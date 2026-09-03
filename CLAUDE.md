@@ -8,7 +8,7 @@ there is no server and no other package.
 Run these from `frontend/`.
 
 ```bash
-npm test           # vitest, 539 tests, no device needed
+npm test           # vitest, 555 tests, no device needed
 npm run lint       # oxlint
 npm run build      # vite
 npm run dev        # browser, for layout work only
@@ -32,13 +32,15 @@ together, so verifying a native change means pushing and reading the run.
 | `src/data/games.js` `sync.js` `stats.js` `backup.js` | Storage, queue, aggregates, backup. |
 | `src/data/capacitor.js` `share.js` | Device-only wiring. Deliberately logic-free. |
 | `src/coach/narrate.js` | Ranks and words what to say about one move, and says where each sentence came from. All the French for a motif lives here. |
-| `src/coach/digest.js` | The facts a language model is allowed to see. Never the PGN. |
+| `src/coach/digest.js` | The facts a language model is allowed to see about one game. Never the PGN. |
+| `src/coach/review.js` | The same, for the whole archive: keyed aggregates, the tactical-theme pass, and the validation that drops a finding citing a number nobody computed. |
 | `src/coach/position.js` | Material, king safety, pawn structure, development, repeated opening moves. |
 | `src/coach/providers.js` `client.js` `config.js` | Provider adapters, the request/validation/fallback loop, and where the keys live — one per provider. |
 | `src/coach/throttle.js` | Sliding-window rate limiter and `Retry-After` backoff for the free tier. |
 | `src/coach/cost.js` | What a commented game costs on a paid provider, measured from what the digest actually sends. |
 | `src/components/ui/` | Button, Card/Panel, Segmented, Badge, and the ⓘ that replaced every `title`. |
 | `src/components/CoachBubble.jsx` `VariationWalk.jsx` | The bubble under the board, and the engine's lines walked one ply at a time. |
+| `src/components/CoachReview.jsx` | The archive review on the statistics screen, each finding shown with the rows it was written from. |
 | `src/components/Icon.jsx` | The icon set, inline. Replaced the emoji that Android drew differently on every device. |
 | `src/utils/api.js` | Facade the pages call. Keeps the shape the old HTTP client had. |
 | `android/app/src/main/java/.../StockfishPlugin.java` | Spawns the engine. Deliberately dumb. |
@@ -184,6 +186,37 @@ another piece by then; the move actually played is the one chessground
 highlights, and the arrow loses that contest on purpose. Only judged moves,
 because nearly every move has some second choice the engine slightly preferred,
 and an arrow on all of them is an arrow that says nothing.
+
+**A review cites its numbers or it does not exist.** `review.js` turns the
+archive into keyed facts — `piece.Q`, `ouverture.3`, `horloge.instant` — and
+the model may only make a claim it attaches a key to. `validateReview` strips
+unknown keys and drops a finding left with none, which is the same guard rail
+as dropping a comment on a ply that was never sent. Without it the answer is a
+horoscope with a chess vocabulary: a model asked "what are my weaknesses" will
+write three fluent paragraphs about king safety whatever the numbers say. The
+screen shows the cited rows under each finding, so the reader can check.
+
+**The review reads the engine, not the coach.** It is built from `stats.js` and
+`insights.js`, never from stored commentary, so a player who has never spent a
+token on per-move comments gets the same review as one who has. What it needs
+is *analysis* coverage and a denominator: facts below their minimum
+(`MIN_PIECE_MOVES`, `MIN_OPENING_GAMES`, …) are never sent, so there is nothing
+to over-read — twelve games of an opening is not a repertoire problem.
+
+**Widening the fact base is still the only way to make it better.** "Tu as du
+mal avec les menaces lointaines du fou" needed `motifs.js` to record *who*
+takes the piece and from how far (`attacker`, `distance` on `hangs`), and
+`review.js` to count it over the last `THEME_GAMES` games. Without that count
+the sentence is one the model would have written anyway, and been unable to
+support. The theme pass replays only the player's *judged* moves: running the
+detectors over every move of forty games is twenty seconds of a phone's time to
+learn nothing about a quiet developing move.
+
+**`reviews` rows are appended, never updated.** A review is what was true on
+the day it was written, and the reason to keep one is to read it against the
+next. Its `facts` are stored beside its `findings` because a key with no number
+behind it cannot be read back a month later. Reviews are *not* in the backup
+file: they are one request to regenerate, and the analyses are what cannot be.
 
 **`title` attributes are not a way to say anything.** The app ships as an APK,
 where nothing hovers, so every explanation that lived in a `title` was written

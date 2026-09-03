@@ -33,6 +33,13 @@ const other = (color) => (color === "w" ? "b" : "w");
 const fileOf = (square) => square[0];
 const rankOf = (square) => Number(square[1]);
 
+/** Squares between two squares, king-wise: 1 is adjacent, 7 is corner to corner. */
+const squareDistance = (from, to) =>
+  Math.max(
+    Math.abs(FILES.indexOf(fileOf(from)) - FILES.indexOf(fileOf(to))),
+    Math.abs(rankOf(from) - rankOf(to)),
+  );
+
 /**
  * The same position with the other side to move.
  *
@@ -93,7 +100,22 @@ export function bestCapture(fen, color) {
     const gain = recapture ? victim - attacker : victim;
     if (gain <= 0) continue;
     if (!best || gain > best.gain) {
-      best = { gain, victim: move.captured, square: move.to, san: move.san, clean: !recapture };
+      best = {
+        gain,
+        victim: move.captured,
+        square: move.to,
+        san: move.san,
+        clean: !recapture,
+        // Who is taking it, and from how far. A pawn taking the piece next to
+        // it and a bishop taking it from the other corner are the same
+        // centipawns and two different mistakes: the second one is a threat
+        // that was on the board and was not looked for. Nothing here judges
+        // that - it is a fact, and the coach cannot say "les menaces
+        // lointaines du fou" about a player unless somebody counted them.
+        attacker: move.piece,
+        from: move.from,
+        distance: squareDistance(move.from, move.to),
+      };
     }
   }
   return best;
@@ -343,6 +365,8 @@ export function motifsFor({ before, after, move }) {
       square: nowLoose.square,
       gain: nowLoose.gain,
       clean: nowLoose.clean,
+      attacker: nowLoose.attacker,
+      distance: nowLoose.distance,
       // The piece that just moved walking onto a square it can be taken on
       // reads very differently from a piece left behind somewhere else.
       moved: nowLoose.square === move.to,

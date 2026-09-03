@@ -30,6 +30,29 @@ const PIECE_NAME = {
 
 const PIECE_LIST = (targets) => targets.map((t) => PIECE_NAME[t.type]).join(" et ");
 
+/** Agreement, so a rook is not "pris" and a knight is not "prise". */
+const FEMININE = new Set(["r", "q"]);
+const pronounFor = (type) => (FEMININE.has(type) ? "elle" : "il");
+const takenFor = (type) => (FEMININE.has(type) ? "prise" : "pris");
+
+/**
+ * Squares between the attacker and what it takes, past which the threat counts
+ * as coming from a distance.
+ *
+ * Three, because two is the knight's own reach and one is a piece standing
+ * next to what it takes - neither is the thing a player misses. A bishop
+ * hitting from the far corner is a different mistake from a pawn taking what
+ * is beside it: same centipawns, and only one of them is a habit.
+ */
+const FAR = 3;
+
+/** " par le fou, qui frappe de loin depuis b2", or nothing at all. */
+function attackedBy(motif) {
+  if (!motif?.attacker || !PIECE_NAME[motif.attacker]) return "";
+  const far = motif.distance >= FAR && "brq".includes(motif.attacker);
+  return ` par ${PIECE_NAME[motif.attacker]}${far ? `, qui frappe de loin depuis ${motif.from}` : ""}`;
+}
+
 /** The French for a motif found on the board itself. */
 export const MOTIF_TEXT = {
   checkmate: () => "Échec et mat.",
@@ -44,8 +67,8 @@ export const MOTIF_TEXT = {
   pin: (m) => `Ce coup cloue ${PIECE_NAME[m.pinnedType]} contre ${PIECE_NAME[m.againstType]}.`,
   hangs: (m) =>
     m.moved
-      ? `Ce coup pose ${PIECE_NAME[m.victim]} en ${m.square} là où il peut être pris.`
-      : `Ce coup laisse ${PIECE_NAME[m.victim]} en prise en ${m.square}.`,
+      ? `Ce coup pose ${PIECE_NAME[m.victim]} en ${m.square} là où ${pronounFor(m.victim)} peut être ${takenFor(m.victim)}${attackedBy(m)}.`
+      : `Ce coup laisse ${PIECE_NAME[m.victim]} en prise en ${m.square}${attackedBy(m)}.`,
   allowsFork: (m) => `Ce coup permet ${m.san} : une fourchette sur ${PIECE_LIST(m.targets)}.`,
   missedMate: (m) => `Il y avait mat en un avec ${m.san}.`,
 };

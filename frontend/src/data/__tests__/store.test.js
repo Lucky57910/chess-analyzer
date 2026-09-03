@@ -551,6 +551,46 @@ describe("filing a game as rated or training", () => {
  * recomputed on the phone. Two rules matter, and neither is obvious from the
  * SQL: a partial run adds to what is there, and re-analysing clears it.
  */
+describe("storing what the coach said about the archive", () => {
+  let ctx;
+  beforeEach(async () => {
+    ctx = await freshStore();
+  });
+
+  it("has nothing to show before the coach has ever been asked", async () => {
+    expect(await ctx.store.latestReview()).toBe(null);
+  });
+
+  it("comes back with its findings and its facts parsed", async () => {
+    const written = await ctx.store.saveReview({
+      gameKind: "rated",
+      games: 58,
+      provider: "gemini",
+      findings: [{ title: "Dame trop tôt", detail: "61 cp.", evidence: ["piece.Q"] }],
+      facts: [{ key: "piece.Q", text: "coups de dame : 812 coups" }],
+    });
+
+    expect(written.findings[0].title).toBe("Dame trop tôt");
+    // The numbers are stored beside the findings on purpose: without them a
+    // review read a month later cites keys that stand for nothing.
+    expect(written.facts[0].text).toMatch(/812 coups/);
+    expect(written.games).toBe(58);
+  });
+
+  // A review is what was true on the day it was written. Rewriting one would
+  // destroy the only thing a second review is for: reading it against the
+  // first.
+  it("appends rather than replacing, newest first", async () => {
+    await ctx.store.saveReview({ games: 10, findings: [{ title: "vieux" }] });
+    await ctx.store.saveReview({ games: 20, findings: [{ title: "neuf" }] });
+
+    expect((await ctx.store.latestReview()).findings[0].title).toBe("neuf");
+    const all = await ctx.store.reviews();
+    expect(all).toHaveLength(2);
+    expect(all.map((row) => row.games)).toEqual([20, 10]);
+  });
+});
+
 describe("storing the coach's commentary", () => {
   let ctx;
   let gameId;

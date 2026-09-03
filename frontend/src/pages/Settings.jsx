@@ -197,7 +197,9 @@ function CoachSettings({ config, onSave, busy }) {
             : adapter.key === 'gemini'
             ? 'Depuis l’Europe, Google applique au palier gratuit les règles du palier payant : ce contenu ne sert pas à entraîner ses modèles. Ses conditions réservent en revanche le palier gratuit au développement — partager cette application avec d’autres personnes en Europe demanderait un palier payant.'
             : 'Sur un palier gratuit, ce contenu sert en général à entraîner les modèles du fournisseur ; les paliers payants ne le font pas.'}{' '}
-          Rien n’est envoyé tant que vous n’appuyez pas sur le bouton, sur l’écran d’une partie.
+          Rien n’est envoyé tant que vous n’appuyez pas sur le bouton, sur l’écran d’une partie —
+          ou sur « Demander un bilan », dans les statistiques, qui envoie des moyennes calculées sur
+          toutes vos parties plutôt que les parties elles-mêmes.
         </p>
         <p className="text-label leading-relaxed text-muted">
           <span className="font-medium text-inaccuracy">La clé est stockée en clair</span> dans la

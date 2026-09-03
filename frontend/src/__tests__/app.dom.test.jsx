@@ -76,6 +76,27 @@ vi.mock("../utils/api", () => {
       added: 1,
       failed: 0,
     })),
+    // The archive-wide review. Null by default: the statistics screen must
+    // stand up before the coach has ever been asked for one.
+    latestReview: vi.fn(async () => null),
+    reviews: vi.fn(async () => []),
+    coachReview: vi.fn(async () => ({
+      id: 1,
+      created_at: new Date().toISOString(),
+      game_kind: "rated",
+      window_days: null,
+      games: 42,
+      provider: "gemini",
+      findings: [
+        {
+          title: "Tu sors la dame trop tôt",
+          detail: "Tes coups de dame coûtent 61 centipions en moyenne.",
+          drill: "Dix parties sans sortir la dame avant le coup 10.",
+          evidence: ["piece.Q"],
+        },
+      ],
+      facts: [{ key: "piece.Q", text: "coups de dame : 812 coups, 61 centipions perdus" }],
+    })),
     games: vi.fn(async () => [
       {
         id: 1,
@@ -1080,6 +1101,50 @@ describe("the best-move arrow", () => {
 
     fireEvent.keyDown(window, { key: "ArrowRight" });
     expect(await screen.findByRole("button", { name: /Masquer le meilleur coup/ })).toBeDefined();
+  });
+});
+
+describe("the coach's review of the whole archive", () => {
+  const withKey = () =>
+    api.settings.mockResolvedValueOnce({
+      chess_com_username: "maxime",
+      last_synced_at: null,
+      engine_depth: 18,
+      coach: {
+        provider: "gemini",
+        model: "gemini-3.7-flash",
+        key_set: true,
+        fallback: true,
+        keys: { gemini: true, openrouter: false, anthropic: false },
+      },
+    });
+
+  it("says what it is before it has ever been asked, and does not ask on its own", async () => {
+    withKey();
+    renderApp("/stats");
+    expect(await screen.findByRole("button", { name: /Demander un bilan/ })).toBeDefined();
+    // It spends somebody's quota. It waits to be asked.
+    expect(api.coachReview).not.toHaveBeenCalled();
+  });
+
+  it("shows the findings, and the numbers each one was written from", async () => {
+    withKey();
+    renderApp("/stats");
+    fireEvent.click(await screen.findByRole("button", { name: /Demander un bilan/ }));
+
+    expect(await screen.findByText("Tu sors la dame trop tôt")).toBeDefined();
+    expect(screen.getByText(/Dix parties sans sortir la dame/)).toBeDefined();
+
+    // The receipts are the point: a claim on this screen can be traced back to
+    // a row of the archive, or it would not have survived validation.
+    fireEvent.click(screen.getByRole("button", { name: /D’où ça sort/ }));
+    expect(await screen.findByText(/812 coups, 61 centipions perdus/)).toBeDefined();
+  });
+
+  it("points at the settings instead of a dead button when no key is stored", async () => {
+    renderApp("/stats");
+    expect(await screen.findByRole("link", { name: /Activer le coach IA/ })).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Demander un bilan/ })).toBe(null);
   });
 });
 

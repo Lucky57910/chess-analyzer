@@ -14,6 +14,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts'
+import CoachReview from '../components/CoachReview'
 import StatsSummary, {
   ACCURACY_NOTE,
   CP_NOTE,
@@ -266,6 +267,10 @@ export default function Stats() {
       <p className="-mt-4 text-label text-faint">{KIND_NOTE[kind]}</p>
 
       <StatsSummary stats={stats} comparison={insights?.comparison} />
+
+      {/* Above every panel it draws from: the panels say what the numbers are,
+          this says what to do about them. */}
+      <CoachReview kind={kind} />
 
       {insights?.comparison && (
         <p className="text-label text-faint">
