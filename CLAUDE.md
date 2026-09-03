@@ -8,7 +8,7 @@ there is no server and no other package.
 Run these from `frontend/`.
 
 ```bash
-npm test           # vitest, 467 tests, no device needed
+npm test           # vitest, 539 tests, no device needed
 npm run lint       # oxlint
 npm run build      # vite
 npm run dev        # browser, for layout work only
@@ -31,13 +31,14 @@ together, so verifying a native change means pushing and reading the run.
 | `src/data/db.js` | Driver contract + Node's SQLite, which is what the tests run on. |
 | `src/data/games.js` `sync.js` `stats.js` `backup.js` | Storage, queue, aggregates, backup. |
 | `src/data/capacitor.js` `share.js` | Device-only wiring. Deliberately logic-free. |
-| `src/coach/narrate.js` | Ranks and words what to say about one move. All the French for a motif lives here. |
+| `src/coach/narrate.js` | Ranks and words what to say about one move, and says where each sentence came from. All the French for a motif lives here. |
 | `src/coach/digest.js` | The facts a language model is allowed to see. Never the PGN. |
 | `src/coach/position.js` | Material, king safety, pawn structure, development, repeated opening moves. |
 | `src/coach/providers.js` `client.js` `config.js` | Provider adapters, the request/validation/fallback loop, and where the keys live — one per provider. |
 | `src/coach/throttle.js` | Sliding-window rate limiter and `Retry-After` backoff for the free tier. |
 | `src/coach/cost.js` | What a commented game costs on a paid provider, measured from what the digest actually sends. |
 | `src/components/ui/` | Button, Card/Panel, Segmented, Badge, and the ⓘ that replaced every `title`. |
+| `src/components/CoachBubble.jsx` `VariationWalk.jsx` | The bubble under the board, and the engine's lines walked one ply at a time. |
 | `src/components/Icon.jsx` | The icon set, inline. Replaced the emoji that Android drew differently on every device. |
 | `src/utils/api.js` | Facade the pages call. Keeps the shape the old HTTP client had. |
 | `android/app/src/main/java/.../StockfishPlugin.java` | Spawns the engine. Deliberately dumb. |
@@ -151,6 +152,38 @@ one reports three times anyone's true rate; and a stacked area draws a missing
 value as zero, so a rate the data cannot support opened the chart at the floor
 and then "climbed". The per-game series keeps no floor — its denominator is
 games, which is exactly what its label says.
+
+**Three things speak under the board and they are not the same thing.**
+A sentence carries an `origin`: `position` (chess.js geometry, always true),
+`engine` (Stockfish - the cost, the wanted move, the variation) or `ai` (a
+model, writing from those two). They were one grey list, which made "ton roi
+reste au centre" look exactly like "ce coup cloue le cavalier". The avatar and
+the header name the author of the paragraph; each supporting line is tagged.
+
+**A variation is state of its own, never a ply.** `narrate` hands the steps
+over as well as the sentence, so a line can be walked on the board instead of
+replayed in the reader's head - and every step already carries the position it
+reaches and what the detectors saw there, so walking one costs no engine call
+and no chess.js. But the board is then showing something that was not played:
+anything that moves the game clears it, the transport row is hidden while it is
+open (a row of arrows that silently changes what it drives is worse than no
+row), and the panel repeats on every ply that these moves were not played.
+
+**The board's coordinates are ours.** chessground places them *outside* the
+board, on the assumption of a padded wrapper. This board is a clipped box of
+exactly its own size, so the defaults put the ranks a fifth of a square too
+high and clipped the files. `index.css` overrides them back inside, which is
+also what `chessground.brown.css` is written for - it alternates each label's
+colour for a light and a dark square.
+
+**The best move is drawn, not hidden behind a button.** On a judged move the
+engine's move is a thin arrow under the pieces, on the position that was
+reached - not the position it belongs to, which would mean rewinding the board
+out from under the move list on every mistake. Its origin square may hold
+another piece by then; the move actually played is the one chessground
+highlights, and the arrow loses that contest on purpose. Only judged moves,
+because nearly every move has some second choice the engine slightly preferred,
+and an arrow on all of them is an arrow that says nothing.
 
 **`title` attributes are not a way to say anything.** The app ships as an APK,
 where nothing hovers, so every explanation that lived in a `title` was written

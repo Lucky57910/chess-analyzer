@@ -15,7 +15,7 @@
  * side of a boundary, a null nobody guarded.
  */
 
-import { cleanup, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, configure, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -900,8 +900,58 @@ describe("explaining a move with the engine's own line", () => {
     await screen.findByRole("button", { name: /meilleur coup/ });
 
     for (let i = 0; i < 3; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
-    expect(await screen.findByText(/L’adversaire enchaîne Nc6 Nf3/)).toBeDefined();
-    expect(await screen.findByText(/Il fallait jouer Nf3 Nc6/)).toBeDefined();
+    expect(await screen.findByText(/L’adversaire enchaîne/)).toBeDefined();
+    expect(await screen.findByText(/Il fallait jouer/)).toBeDefined();
+    // The moves inside both sentences are buttons, not text: this is the line
+    // the reader can walk rather than replay in their head. Scoped to the
+    // bubble, because the move list beside the board carries the same names.
+    const bubble = within(screen.getByLabelText("Commentaire du coach"));
+    expect(bubble.getAllByRole("button", { name: "Nc6" }).length).toBe(2);
+    expect(bubble.getAllByRole("button", { name: "Nf3" }).length).toBe(2);
+  });
+
+  // A line the reader can only read is a line they have to play in their head
+  // against a board showing something else, which is the skill they came here
+  // without.
+  it("walks the line on the board, saying what each move does", async () => {
+    const base = await api.game();
+    api.game.mockResolvedValue({ ...base, pgn: "1. e4 e5 2. Qh5 Nc6 *" });
+    renderApp("/games/1");
+    await screen.findByRole("button", { name: /meilleur coup/ });
+
+    for (let i = 0; i < 3; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
+    const bubble = within(screen.getByLabelText("Commentaire du coach"));
+    fireEvent.click(bubble.getAllByRole("button", { name: "Nc6" })[0]);
+
+    // Whose move it is, said out loud: half the plies of a refutation are the
+    // opponent's, and a reader who loses track of that reads the line backwards.
+    expect(await screen.findByText("Les noirs jouent Nc6.")).toBeDefined();
+    expect(screen.getByText(/n’ont pas été joués/)).toBeDefined();
+
+    // The arrows now walk the line rather than the game.
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(await screen.findByText("Les blancs jouent Nf3.")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: /Retour à la partie/ }));
+    await waitFor(() => expect(screen.queryByText(/n’ont pas été joués/)).toBe(null));
+    // And the game is where it was left, not where the line ended.
+    expect(screen.getByText(/L’adversaire enchaîne/)).toBeDefined();
+  });
+
+  // Stepping back off the front of a line is the same gesture as leaving it.
+  it("returns to the game when walked back past its first move", async () => {
+    const base = await api.game();
+    api.game.mockResolvedValue({ ...base, pgn: "1. e4 e5 2. Qh5 Nc6 *" });
+    renderApp("/games/1");
+    await screen.findByRole("button", { name: /meilleur coup/ });
+
+    for (let i = 0; i < 3; i += 1) fireEvent.keyDown(window, { key: "ArrowRight" });
+    const walkable = within(screen.getByLabelText("Commentaire du coach"));
+    fireEvent.click(walkable.getAllByRole("button", { name: "Nc6" })[0]);
+    expect(await screen.findByText("Les noirs jouent Nc6.")).toBeDefined();
+
+    fireEvent.keyDown(window, { key: "ArrowLeft" });
+    await waitFor(() => expect(screen.queryByText(/n’ont pas été joués/)).toBe(null));
   });
 
   // Everything analysed before the driver kept variations has none of this,
@@ -988,7 +1038,7 @@ describe("playing the position out", () => {
   });
 });
 
-describe("the best-move peek", () => {
+describe("the best-move arrow", () => {
   // It used to be a mode: asking to see the engine move on one ply left the
   // board rewound on every ply after it, so walking the game silently stopped
   // showing the game. It is now scoped to the position it was asked for.
@@ -999,17 +1049,37 @@ describe("the best-move peek", () => {
     const peek = await screen.findByRole("button", { name: /meilleur coup/ });
     expect(peek.disabled).toBe(true);
 
+    // Ply 1 is second-best but unjudged, so the arrow is off until asked for.
     fireEvent.keyDown(window, { key: "ArrowRight" });
     await waitFor(() => expect(peek.disabled).toBe(false));
+    expect(peek.textContent).toMatch(/Voir le meilleur coup/);
 
     fireEvent.click(peek);
-    expect(await screen.findByRole("button", { name: /Revenir au coup joué/ })).toBeDefined();
+    expect(await screen.findByRole("button", { name: /Masquer le meilleur coup/ })).toBeDefined();
 
     fireEvent.keyDown(window, { key: "ArrowRight" });
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: /Revenir au coup joué/ })).toBe(null),
+      expect(screen.queryByRole("button", { name: /Masquer le meilleur coup/ })).toBe(null),
     );
-    expect(screen.getByRole("button", { name: /Voir le meilleur coup/ })).toBeDefined();
+  });
+
+  // The whole point of drawing it rather than hiding it behind a button: on a
+  // move that cost something, the arrow is already there. "Masquer" is the
+  // label the button carries when it is, which is how this is observable
+  // without reaching into chessground's SVG.
+  it("is already drawn on a judged move", async () => {
+    renderApp("/games/1");
+    await screen.findByRole("button", { name: /meilleur coup/ });
+
+    // Ply 3 is the blunder in the fixture; ply 2 is the engine's own move.
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /meilleur coup/ }).disabled).toBe(true),
+    );
+
+    fireEvent.keyDown(window, { key: "ArrowRight" });
+    expect(await screen.findByRole("button", { name: /Masquer le meilleur coup/ })).toBeDefined();
   });
 });
 

@@ -83,11 +83,71 @@ const WEIGHT = {
   rooksConnected: 10,
 };
 
+/**
+ * Plies of a variation kept.
+ *
+ * The same four `lineText` prints. A stored line is only four plies deep in
+ * the first place; this is here so the walkable version and the sentence can
+ * never disagree about how long the line is.
+ */
+const LINE_LIMIT = 4;
+
 /** What the move gave away outranks what it achieved, at equal weight. */
 const rank = (motif) => (WEIGHT[motif.key] ?? 0) + (motif.side === "opponent" ? 1 : 0);
 
+/**
+ * Where a sentence came from.
+ *
+ * Three different things speak under the board and they used to be one grey
+ * list, which made the coach's paragraph indistinguishable from a geometric
+ * fact about the position. They are not equally trustworthy and they are not
+ * equally about *you*:
+ *
+ *   - `position`: chess.js geometry. No engine, no model. Always true.
+ *   - `engine`: Stockfish — what the move cost, what it wanted, the variation.
+ *   - `ai`: a language model, writing from the two above and nothing else.
+ */
+export const ORIGIN = {
+  ai: "ai",
+  engine: "engine",
+  position: "position",
+};
+
 /** A sentence in the message, with the colour it should be read in. */
-const line = (text, tone) => ({ text, tone });
+const line = (text, tone, extra = {}) => ({ text, tone, ...extra });
+
+/** What a variation is, said before its moves. */
+export const LINE_LABEL = {
+  refutation: "L’adversaire enchaîne",
+  best: "Il fallait jouer",
+};
+
+const COLOUR_FR = { white: "Les blancs", black: "Les noirs" };
+
+/**
+ * One ply of a variation, for a reader walking it move by move.
+ *
+ * A line printed as `Cf7+ Rg8 Cxd8` is four moves the reader has to play in
+ * their head against a board showing a different position. Walked instead, each
+ * ply is a position they can see — and the detectors already ran on every one
+ * of them inside `replayLine`, so saying what each move does costs nothing
+ * more than wording what is already there.
+ */
+export function stepNarration(step) {
+  if (!step) return null;
+  const facts = [...(step.motifs ?? [])]
+    .sort((a, b) => rank(b) - rank(a))
+    .map(motifText)
+    .filter(Boolean);
+  return {
+    san: step.san,
+    color: step.color,
+    // The colour rather than "tu": a variation is read from both sides, and
+    // half of these plies are the opponent's.
+    move: `${COLOUR_FR[step.color] ?? "On"} jouent ${step.san}.`,
+    facts,
+  };
+}
 
 export const TONE = {
   blunder: "blunder",
@@ -128,7 +188,8 @@ export function verdictFor(move) {
  * @param {string|null} args.aiText      A coach paragraph, when one was generated.
  * @returns {{
  *   tone: string, verdict: string|null, headline: string|null,
- *   details: Array<{text: string, tone: string}>,
+ *   headlineOrigin: string|null, headlineVariation: object|null,
+ *   details: Array<{text: string, tone: string, origin: string, variation?: object}>,
  *   cost: number|null, better: string|null, source: 'ai'|'engine'|'none'
  * }}
  */
@@ -141,24 +202,34 @@ export function narrate({ move, motifs = [], lines = {}, aiText = null } = {}) {
   // Every fact the position and the engine give us, strongest first.
   const facts = [...motifs]
     .sort((a, b) => rank(b) - rank(a))
-    .map((m) => line(motifText(m), m.side === "opponent" ? TONE.blunder : TONE.neutral))
+    .map((m) =>
+      line(motifText(m), m.side === "opponent" ? TONE.blunder : TONE.neutral, {
+        origin: ORIGIN.position,
+      }),
+    )
     .filter((l) => l.text);
 
-  if (lines.refutation) {
-    const moment = momentText(lines.refutation.moment);
+  // A variation carries its own moves rather than only the sentence they were
+  // flattened into, so a screen can offer to walk it instead of asking the
+  // reader to play `Cf7+ Rg8 Cxd8` in their head.
+  for (const kind of ["refutation", "best"]) {
+    const found = lines[kind];
+    if (!found) continue;
+    const moment = momentText(found.moment);
+    const moves = lineText(found.steps);
     facts.push(
       line(
-        `L’adversaire enchaîne ${lineText(lines.refutation.steps)}${moment ? ` : ${moment}.` : "."}`,
-        TONE.blunder,
-      ),
-    );
-  }
-  if (lines.best) {
-    const moment = momentText(lines.best.moment);
-    facts.push(
-      line(
-        `Il fallait jouer ${lineText(lines.best.steps)}${moment ? ` : ${moment}.` : "."}`,
-        TONE.good,
+        `${LINE_LABEL[kind]} ${moves}${moment ? ` : ${moment}.` : "."}`,
+        kind === "refutation" ? TONE.blunder : TONE.good,
+        {
+          origin: ORIGIN.engine,
+          variation: {
+            kind,
+            label: LINE_LABEL[kind],
+            steps: found.steps.slice(0, LINE_LIMIT),
+            moment,
+          },
+        },
       ),
     );
   }
@@ -171,6 +242,7 @@ export function narrate({ move, motifs = [], lines = {}, aiText = null } = {}) {
       tone,
       verdict,
       headline: aiText,
+      headlineOrigin: ORIGIN.ai,
       details: facts,
       cost,
       better,
@@ -179,9 +251,30 @@ export function narrate({ move, motifs = [], lines = {}, aiText = null } = {}) {
   }
 
   if (!facts.length) {
-    return { tone, verdict, headline: null, details: [], cost, better, source: "none" };
+    return {
+      tone,
+      verdict,
+      headline: null,
+      headlineOrigin: null,
+      details: [],
+      cost,
+      better,
+      source: "none",
+    };
   }
 
   const [first, ...rest] = facts;
-  return { tone, verdict, headline: first.text, details: rest, cost, better, source: "engine" };
+  return {
+    tone,
+    verdict,
+    headline: first.text,
+    headlineOrigin: first.origin,
+    // The lead sentence keeps whatever it carried: a headline that is itself a
+    // variation is still walkable.
+    headlineVariation: first.variation ?? null,
+    details: rest,
+    cost,
+    better,
+    source: "engine",
+  };
 }

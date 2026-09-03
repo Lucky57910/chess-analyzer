@@ -7,6 +7,7 @@ import EvalGraph from '../components/EvalGraph'
 import Icon from '../components/Icon'
 import MoveList from '../components/MoveList'
 import Sparring from '../components/Sparring'
+import VariationWalk from '../components/VariationWalk'
 import { StatTile } from '../components/StatsSummary'
 import Badge from '../components/ui/Badge'
 import Button from '../components/ui/Button'
@@ -111,14 +112,27 @@ export default function GameAnalysis() {
   const [ply, setPly] = useState(0)
   const [flipped, setFlipped] = useState(false)
   const [playing, setPlaying] = useState(false)
-  // The ply the engine move was asked for, not a boolean: a peek belongs to one
-  // position. Storing the ply makes "stop showing it when the user moves on"
-  // fall out of the comparison instead of needing an effect to undo it.
-  const [bestPeekPly, setBestPeekPly] = useState(null)
+  // The ply the arrow was asked for or waved away, not a boolean: an override
+  // belongs to one position. Storing the ply makes "go back to the default
+  // when the user moves on" fall out of the comparison instead of needing an
+  // effect to undo it.
+  const [hintOverride, setHintOverride] = useState(null)
   const [error, setError] = useState(null)
   const [tab, setTab] = useState('moves')
   const [showGraph, setShowGraph] = useState(false)
   const [sparringFrom, setSparringFrom] = useState(null)
+  /*
+   * A line being walked, or nothing.
+   *
+   * `{ ...variation, index }`: the steps come straight from `narrate`, which
+   * got them from `replayLine`, so each one already carries the position it
+   * reaches and what the detectors saw there. Walking it is reading an array -
+   * no engine, no chess.js, nothing to wait for.
+   *
+   * It is *not* a ply of the game, which is why it is state of its own rather
+   * than a value of `ply`: everything that moves the game clears it.
+   */
+  const [variation, setVariation] = useState(null)
   // The coach's own state. `coachNotes` shadows what the analysis carried so a
   // freshly generated commentary appears without reloading the game.
   const [coachNotes, setCoachNotes] = useState(null)
@@ -245,9 +259,36 @@ export default function GameAnalysis() {
   }, [cache, moves, ply])
 
   const goTo = useCallback(
-    (next) => setPly(Math.max(0, Math.min(moves.length, next))),
+    (next) => {
+      // Moving in the game leaves the variation. A line is read against the
+      // position it starts from; carrying it onto the next ply would draw the
+      // engine's answer to a question nobody asked there.
+      setVariation(null)
+      setPly(Math.max(0, Math.min(moves.length, next)))
+    },
     [moves.length],
   )
+
+  /**
+   * Step inside the line being walked.
+   *
+   * Stepping back off the front of it returns to the game rather than doing
+   * nothing: the reader entered the variation from a position, and that is the
+   * position behind its first move.
+   */
+  const stepVariation = useCallback((next) => {
+    setVariation((current) => {
+      if (!current) return current
+      if (next < 0) return null
+      if (next > current.steps.length - 1) return current
+      return { ...current, index: next }
+    })
+  }, [])
+
+  /** Open a line at one of its moves, from the sentence that mentions it. */
+  const playLine = useCallback((line, index) => {
+    setVariation({ ...line, index })
+  }, [])
 
   // Swiping across the board walks the game, so a phone never has to reach for
   // the arrow buttons under it. The `touch-pan-y` on the wrapper is what makes
@@ -272,8 +313,11 @@ export default function GameAnalysis() {
     touchStart.current = null
     if (!start) return
     if (Math.abs(start.dx) < SWIPE_MIN_PX || Math.abs(start.dx) <= Math.abs(start.dy)) return
-    goTo(start.dx < 0 ? ply + 1 : ply - 1)
-  }, [goTo, ply])
+    const forward = start.dx < 0
+    // The same gesture, applied to whatever the board is currently showing.
+    if (variation) stepVariation(variation.index + (forward ? 1 : -1))
+    else goTo(forward ? ply + 1 : ply - 1)
+  }, [goTo, ply, stepVariation, variation])
 
   const onTouchCancel = useCallback(() => {
     touchStart.current = null
@@ -281,6 +325,16 @@ export default function GameAnalysis() {
 
   useEffect(() => {
     function onKey(e) {
+      // While a line is open the arrows walk it, because that is what is on
+      // the board. Escape is the way out that needs no button.
+      if (variation) {
+        if (e.key === 'ArrowLeft') stepVariation(variation.index - 1)
+        else if (e.key === 'ArrowRight') stepVariation(variation.index + 1)
+        else if (e.key === 'Escape') setVariation(null)
+        else return
+        e.preventDefault()
+        return
+      }
       if (e.key === 'ArrowLeft') goTo(ply - 1)
       else if (e.key === 'ArrowRight') goTo(ply + 1)
       else if (e.key === 'ArrowUp') goTo(0)
@@ -290,7 +344,7 @@ export default function GameAnalysis() {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [ply, goTo, moves.length])
+  }, [ply, goTo, moves.length, stepVariation, variation])
 
   useEffect(() => {
     if (!playing) return undefined
@@ -306,26 +360,60 @@ export default function GameAnalysis() {
   if (!game) return <p className="text-body text-faint">Chargement…</p>
 
   const current = ply > 0 ? moves[ply - 1] : null
-  const previous = ply > 1 ? moves[ply - 2] : null
   const userColor = game.user_color
   const orientation = flipped ? (userColor === 'white' ? 'black' : 'white') : userColor
 
-  // "Voir le meilleur coup" rewinds one ply and draws the engine move as an
-  // arrow. It is a peek, not a mode: walking to another ply drops it, because
-  // `bestPeekPly` no longer matches.
-  const bestAvailable = Boolean(current?.best_move_uci) && !current?.is_best
-  const showingBest = bestPeekPly === ply && bestAvailable
-  const fen = showingBest ? (previous?.fen_after ?? START_FEN) : (current?.fen_after ?? START_FEN)
-  const lastMove = showingBest ? previous?.uci : current?.uci
-  const shapes = showingBest
-    ? [
-        {
-          orig: current.best_move_uci.slice(0, 2),
-          dest: current.best_move_uci.slice(2, 4),
-          brush: 'green',
-        },
-      ]
-    : []
+  /*
+   * The move the engine wanted, drawn over the position that was reached.
+   *
+   * This used to rewind a ply and show the board *before* the move, which is
+   * where the arrow strictly belongs — it is the alternative to what was
+   * played. But it moved the board out from under the move list every time,
+   * and the position you are looking at stopped being the position you walked
+   * to. So the board stays put and the arrow is drawn on it: its origin square
+   * may now hold another piece, or none, which costs less than it sounds
+   * because chessground is already highlighting the move that *was* played and
+   * the arrow is a thin line underneath the pieces.
+   *
+   * Shown by default only on a judged move. Nearly every move has some second
+   * choice the engine slightly preferred; an arrow on all of them is an arrow
+   * that says nothing. The button below overrides the default either way, for
+   * this ply only.
+   */
+  const bestAvailable = Boolean(current?.best_move_uci) && !current?.is_best && !variation
+  const showingBest =
+    bestAvailable &&
+    (hintOverride?.ply === ply ? hintOverride.show : Boolean(current.judgment))
+
+  // The board shows the line when one is open, and the game otherwise. One
+  // place decides it, so nothing below can disagree about which position is on
+  // screen.
+  const walked = variation ? variation.steps[variation.index] : null
+  const nextStep = variation ? variation.steps[variation.index + 1] : null
+  const fen = walked ? walked.after : (current?.fen_after ?? START_FEN)
+  const lastMove = walked ? walked.uci : current?.uci
+  const shapes = walked
+    ? // What comes next in the line, drawn on the position it answers. Red
+      // when it is the opponent's - in a refutation every other ply is theirs,
+      // and the point of the line is usually what they do to you.
+      nextStep
+      ? [
+          {
+            orig: nextStep.uci.slice(0, 2),
+            dest: nextStep.uci.slice(2, 4),
+            brush: nextStep.color === userColor ? 'hint' : 'threat',
+          },
+        ]
+      : []
+    : showingBest
+      ? [
+          {
+            orig: current.best_move_uci.slice(0, 2),
+            dest: current.best_move_uci.slice(2, 4),
+            brush: 'hint',
+          },
+        ]
+      : []
 
   // What the coach says about the ply on screen. Everything it needs was
   // already computed above; this only ranks and words it. A generated
@@ -524,7 +612,9 @@ export default function GameAnalysis() {
                 onTouchEnd={onTouchEnd}
                 onTouchCancel={onTouchCancel}
               >
-                <EvalBar move={current} orientation={orientation} />
+                {/* The evaluation belongs to the game's move, and the board
+                    is not showing it while a line is walked. */}
+                <EvalBar move={variation ? null : current} orientation={orientation} />
                 <div className="min-w-0 flex-1">
                   <Board fen={fen} orientation={orientation} lastMove={lastMove} shapes={shapes} />
                 </div>
@@ -532,8 +622,13 @@ export default function GameAnalysis() {
 
               {/* Walking the game is one fixed row of icons the thumb learns.
                   The two controls whose labels change sit on their own row, so
-                  they cannot shuffle the arrows out from under it. */}
-              <div className="flex items-center gap-0.5">
+                  they cannot shuffle the arrows out from under it.
+
+                  Hidden while a line is open: those arrows walk the game, the
+                  board is showing something else, and a row of controls that
+                  silently changes what it drives is worse than one that is not
+                  there. The line's own controls are under the board. */}
+              <div className={`flex items-center gap-0.5 ${variation ? 'hidden' : ''}`}>
                 <Button
                   size="icon"
                   variant="ghost"
@@ -589,11 +684,12 @@ export default function GameAnalysis() {
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   size="sm"
+                  variant={showingBest ? 'ghost' : 'secondary'}
                   icon="hint"
-                  onClick={() => setBestPeekPly(showingBest ? null : ply)}
+                  onClick={() => setHintOverride({ ply, show: !showingBest })}
                   disabled={!bestAvailable}
                 >
-                  {showingBest ? 'Revenir au coup joué' : 'Voir le meilleur coup'}
+                  {showingBest ? 'Masquer le meilleur coup' : 'Voir le meilleur coup'}
                 </Button>
                 <Button
                   size="sm"
@@ -629,14 +725,24 @@ export default function GameAnalysis() {
             they are reachable from the starting position too. */}
         {!sparringFrom && (
           <div className="order-2 flex flex-col gap-2 lg:order-none lg:col-start-1 lg:row-start-2">
-            {current && (
-              <CoachBubble
-                message={message}
-                san={current.san}
-                moveNumber={current.move_number}
-                color={current.color}
-                pending={coachBusy && !aiText}
+            {variation ? (
+              <VariationWalk
+                variation={variation}
+                index={variation.index}
+                onStep={stepVariation}
+                onExit={() => setVariation(null)}
               />
+            ) : (
+              current && (
+                <CoachBubble
+                  message={message}
+                  san={current.san}
+                  moveNumber={current.move_number}
+                  color={current.color}
+                  pending={coachBusy && !aiText}
+                  onPlayLine={playLine}
+                />
+              )
             )}
 
             {analysis && (
@@ -695,13 +801,13 @@ export default function GameAnalysis() {
           </div>
           <div className="h-64 overflow-y-auto lg:h-[30rem]">
             {tab === 'moves' ? (
-              <MoveList moves={moves} currentPly={ply} onSelectPly={setPly} />
+              <MoveList moves={moves} currentPly={ply} onSelectPly={goTo} />
             ) : (
               <MistakeTimeline
                 moves={moves}
                 userColor={userColor}
                 currentPly={ply}
-                onSelectPly={setPly}
+                onSelectPly={goTo}
               />
             )}
           </div>
@@ -747,7 +853,7 @@ export default function GameAnalysis() {
             </Button>
             {(showGraph || isDesktop) && (
               <Card className="p-2">
-                <EvalGraph moves={moves} currentPly={ply} onSelectPly={setPly} />
+                <EvalGraph moves={moves} currentPly={ply} onSelectPly={goTo} />
               </Card>
             )}
           </section>

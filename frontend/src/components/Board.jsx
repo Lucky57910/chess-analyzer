@@ -2,6 +2,21 @@ import { useEffect, useRef } from 'react'
 import { Chessground } from 'chessground'
 
 /**
+ * Brushes of our own, drawn under the pieces.
+ *
+ * chessground's `green` is a 10px opaque line meant for a shape somebody drew
+ * on purpose. The engine's suggestion is not that: it is a hint sitting beside
+ * the move that was actually played, and it must lose that contest. So a
+ * thinner line in the app's own green, and no arrow for the reply — the shape
+ * layer is already under the pieces (`z-index: 2` against a piece's 3) and at
+ * 0.6 opacity, which is the rest of the subtlety.
+ */
+const BRUSHES = {
+  hint: { key: 'hint', color: '#7cb342', opacity: 0.9, lineWidth: 7 },
+  threat: { key: 'threat', color: '#eb5757', opacity: 0.9, lineWidth: 7 },
+}
+
+/**
  * Chessground driven by a FEN.
  *
  * Read-only by default, which is what the analysis screen wants. Passing
@@ -33,7 +48,7 @@ export default function Board({
       coordinates: true,
       animation: { enabled: true, duration: 180 },
       highlight: { lastMove: true, check: true },
-      drawable: { enabled: false, visible: true, autoShapes: shapes },
+      drawable: { enabled: false, visible: true, autoShapes: shapes, brushes: BRUSHES },
       movable: {
         free: false,
         showDests: true,

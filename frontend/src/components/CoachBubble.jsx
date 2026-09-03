@@ -11,9 +11,23 @@
  * reading size. It is the loudest thing under the board, which matches what it
  * is for.
  *
- * Everything it says comes from `coach/narrate.js`; this file only draws.
+ * Two things it now says that it did not:
+ *
+ *   - **who is talking.** Three sources speak here — a language model,
+ *     Stockfish, and pure chess.js geometry — and they used to be one grey
+ *     list, so "ton roi reste au centre" (written by a model) looked exactly
+ *     like "ce coup cloue le cavalier" (a fact). They are not equally
+ *     trustworthy; the reader is entitled to know which is which. The avatar
+ *     and the header say who wrote the paragraph, and each supporting line
+ *     carries a tag.
+ *   - **that a variation can be walked.** A line printed as `Cf7+ Rg8 Cxd8`
+ *     asks the reader to play three moves in their head against a board
+ *     showing something else. The moves are buttons now.
+ *
+ * Everything it says still comes from `coach/narrate.js`; this file only draws.
  */
 
+import { ORIGIN } from '../coach/narrate.js'
 import Icon from './Icon'
 
 /** Left edge, avatar, and verdict colour, per tone. */
@@ -35,23 +49,94 @@ const DETAIL_TONE = {
   neutral: 'text-muted',
 }
 
-export default function CoachBubble({ message, san, moveNumber, color, pending }) {
+/**
+ * How each source introduces itself.
+ *
+ * Short words, because they sit at the head of every supporting line: "IA"
+ * rather than "commentaire généré", "Moteur" rather than "Stockfish 17.1". The
+ * distinction that matters to the reader is only ever three-way.
+ */
+const SOURCE = {
+  [ORIGIN.ai]: { label: 'Coach IA', icon: 'knight', className: 'bg-accent/15 text-accent' },
+  [ORIGIN.engine]: { label: 'Moteur', icon: 'cpu', className: 'bg-raised text-muted' },
+  [ORIGIN.position]: { label: 'Position', icon: 'grid', className: 'bg-raised text-muted' },
+}
+
+/** Who wrote a line, in three characters of screen. */
+function SourceTag({ origin }) {
+  const source = SOURCE[origin]
+  if (!source) return null
+  return (
+    <span
+      className={`mr-1.5 inline-flex items-center gap-1 rounded px-1.5 py-px align-[0.1em] text-label font-medium ${source.className}`}
+    >
+      <Icon name={source.icon} size={11} />
+      {source.label}
+    </span>
+  )
+}
+
+/**
+ * A variation, with its moves as buttons.
+ *
+ * The sentence is unchanged — "L’adversaire enchaîne Cc6 Cf3 : et la dame
+ * tombe" — the moves inside it are simply tappable. Tapping one hands the
+ * whole line and that index up, and the screen walks the board to it.
+ *
+ * With no handler the moves render as plain text, which is what keeps this
+ * component drawable anywhere.
+ */
+function Variation({ variation, tone, onPlay }) {
+  const moves = variation.steps.map((step, index) =>
+    onPlay ? (
+      <button
+        key={index}
+        type="button"
+        onClick={() => onPlay(variation, index)}
+        className="mx-0.5 rounded border border-line-strong bg-raised px-1.5 py-0.5 font-mono text-body text-text transition-colors hover:border-accent hover:text-accent active:bg-line-strong"
+      >
+        {step.san}
+      </button>
+    ) : (
+      <span key={index} className="mx-0.5 font-mono">
+        {step.san}
+      </span>
+    ),
+  )
+
+  return (
+    <span className={DETAIL_TONE[tone] ?? 'text-muted'}>
+      {variation.label} {moves}
+      {variation.moment ? ` : ${variation.moment}.` : '.'}
+    </span>
+  )
+}
+
+export default function CoachBubble({
+  message,
+  san,
+  moveNumber,
+  color,
+  pending,
+  onPlayLine,
+}) {
   const hasSomething = message?.headline || message?.details?.length || message?.verdict
   if (!hasSomething && !pending) return null
 
   const tone = TONE[message?.tone] ?? TONE.neutral
+  // Who the avatar is. A generated paragraph makes this the coach; without one
+  // the bubble is the engine reading its own analysis out loud, and drawing a
+  // knight over that claims an author that does not exist.
+  const author = SOURCE[message?.headlineOrigin] ?? SOURCE[ORIGIN.engine]
 
   return (
-    <section
-      aria-label="Commentaire du coach"
-      className="flex items-start gap-2.5"
-    >
+    <section aria-label="Commentaire du coach" className="flex items-start gap-2.5">
       {/* The avatar is what makes this read as somebody talking rather than as
-          one more panel. It is the same knight as the title bar. */}
+          one more panel. */}
       <span
         className={`mt-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-raised ring-1 ${tone.ring}`}
       >
-        <Icon name="knight" size={20} className="text-accent" />
+        <Icon name={author.icon} size={20} className="text-accent" />
       </span>
 
       <div
@@ -89,6 +174,14 @@ export default function CoachBubble({ message, san, moveNumber, color, pending }
               mieux : <span className="font-mono text-muted">{message.better}</span>
             </span>
           )}
+          {/* Who wrote the paragraph below, said once rather than tagged onto
+              the paragraph itself. */}
+          {message?.headline && (
+            <span className="ml-auto flex items-center gap-1 text-label text-faint">
+              <Icon name={author.icon} size={12} />
+              {author.label}
+            </span>
+          )}
         </div>
 
         {pending ? (
@@ -97,19 +190,37 @@ export default function CoachBubble({ message, san, moveNumber, color, pending }
             Le coach rédige son commentaire…
           </p>
         ) : (
-          message?.headline && (
+          message?.headline &&
+          (message.headlineVariation ? (
+            <p className="mt-1.5 text-body leading-relaxed">
+              <Variation
+                variation={message.headlineVariation}
+                tone={message.tone}
+                onPlay={onPlayLine}
+              />
+            </p>
+          ) : (
             <p className="mt-1.5 text-body leading-relaxed text-text">{message.headline}</p>
-          )
+          ))
         )}
 
         {message?.details?.length > 0 && (
-          <ul className="mt-1.5 flex flex-col gap-1">
+          <ul className="mt-1.5 flex flex-col gap-1.5">
             {message.details.map((detail, i) => (
               <li
                 key={i}
                 className={`text-body leading-snug ${DETAIL_TONE[detail.tone] ?? 'text-muted'}`}
               >
-                {detail.text}
+                <SourceTag origin={detail.origin} />
+                {detail.variation ? (
+                  <Variation
+                    variation={detail.variation}
+                    tone={detail.tone}
+                    onPlay={onPlayLine}
+                  />
+                ) : (
+                  detail.text
+                )}
               </li>
             ))}
           </ul>

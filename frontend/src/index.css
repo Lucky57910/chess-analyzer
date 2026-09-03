@@ -80,6 +80,50 @@ body {
 }
 
 /*
+ * The coordinates, put back inside the board.
+ *
+ * chessground's defaults place them *outside* it - ranks at `top: -20px`,
+ * files at `bottom: -4px; left: 24px` - because lichess wraps the board in a
+ * container padded to hold them. This app gives the board a rounded, clipped
+ * box of exactly its own size, so the ranks sat a fifth of a square too high,
+ * the files a third of a file too far right, and the bottom edge of the row
+ * was cut off by the `overflow-hidden`. Reading a move off the board meant
+ * counting squares.
+ *
+ * Inside is also what the theme is written for: `chessground.brown.css`
+ * already alternates each label between a light and a dark colour, which only
+ * makes sense for labels drawn on the squares themselves.
+ */
+.cg-wrap coords {
+  font-size: 10px;
+  font-weight: 600;
+  opacity: 1;
+}
+
+.cg-wrap coords.ranks {
+  top: 0;
+  left: 3px;
+  width: auto;
+  height: 100%;
+}
+
+.cg-wrap coords.ranks coord {
+  /* Chessground nudges every rank down 39% of its own height to clear a border
+     this board does not have. Centred in its square is what the eye checks a
+     rank against. */
+  transform: none;
+  display: flex;
+  align-items: center;
+}
+
+.cg-wrap coords.files {
+  bottom: 2px;
+  left: 0;
+  width: 100%;
+  height: auto;
+}
+
+/*
  * One focus ring for the whole app, drawn outside the element so it never
  * moves a layout. `:focus-visible` rather than `:focus`, so a tap on a phone
  * does not leave a ring behind on every button it touches.

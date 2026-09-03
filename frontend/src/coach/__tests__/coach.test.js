@@ -29,7 +29,7 @@ import {
 } from "../digest.js";
 import { createLimiter, retryDelay } from "../throttle.js";
 import { costPerGame, formatCost, tokensForGame } from "../cost.js";
-import { narrate } from "../narrate.js";
+import { narrate, stepNarration } from "../narrate.js";
 import { PROVIDERS } from "../providers.js";
 import {
   keySetting,
@@ -406,6 +406,50 @@ describe("what the bubble is told to say", () => {
     });
     expect(message.source).toBe("engine");
     expect(message.headline).toMatch(/la dame/);
+  });
+
+  // Three sources speak under the board and they are not equally trustworthy.
+  // A screen cannot say which is which if the message does not carry it.
+  it("says where every sentence came from", () => {
+    const message = narrate({
+      move,
+      motifs: [{ key: "hangs", side: "opponent", victim: "q", square: "h5", moved: true }],
+      lines: {},
+      aiText: "Ta dame n’a rien à faire là.",
+    });
+    expect(message.headlineOrigin).toBe("ai");
+    expect(message.details.every((d) => d.origin === "position")).toBe(true);
+  });
+
+  it("hands the variation's own moves over, not only the sentence", () => {
+    const steps = [
+      { uci: "b8c6", san: "Nc6", color: "black", after: "fen-1", motifs: [] },
+      { uci: "g1f3", san: "Nf3", color: "white", after: "fen-2", motifs: [] },
+    ];
+    const message = narrate({ move, motifs: [], lines: { refutation: { steps, moment: null } } });
+    // It is the only thing there is to say, so it leads.
+    expect(message.headlineVariation.kind).toBe("refutation");
+    expect(message.headlineVariation.steps.map((s) => s.san)).toEqual(["Nc6", "Nf3"]);
+    // The sentence is still the sentence: nothing about walking the line
+    // changes what a screen that cannot walk it prints.
+    expect(message.headline).toBe("L’adversaire enchaîne Nc6 Nf3.");
+    expect(message.headlineOrigin).toBe("engine");
+  });
+
+  // The detectors already ran on every ply of the line inside `replayLine`, so
+  // saying what each move does costs nothing beyond wording it.
+  it("words one ply of a variation from what was seen there", () => {
+    const said = stepNarration({
+      san: "Nf3",
+      color: "white",
+      motifs: [
+        { key: "rookOpenFile", side: "you", file: "e" },
+        { key: "fork", side: "you", piece: "n", targets: [{ type: "r" }, { type: "q" }] },
+      ],
+    });
+    expect(said.move).toBe("Les blancs jouent Nf3.");
+    // Ranked, like everywhere else: the fork before the open file.
+    expect(said.facts[0]).toMatch(/fourchette/);
   });
 
   it("ranks the mate above the open file rather than printing them in detector order", () => {

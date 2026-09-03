@@ -43,6 +43,11 @@ const PATHS = {
   coach: 'M12 3l1.8 4.1L18 8.9l-4.2 1.8L12 15l-1.8-4.3L6 8.9l4.2-1.8L12 3ZM18.5 15l.8 1.8 1.7.7-1.7.7-.8 1.8-.8-1.8-1.7-.7 1.7-.7.8-1.8ZM5 14l.7 1.6 1.6.7-1.6.7L5 18.6l-.7-1.6-1.6-.7 1.6-.7L5 14Z',
   warning: 'M10.3 3.9 1.9 18a2 2 0 0 0 1.7 3h16.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0ZM12 9v4M12 17h.01',
   check: 'M20 6 9 17l-5-5',
+  // The engine, as opposed to the coach: what Stockfish says wears this, what
+  // a language model wrote wears the knight.
+  cpu: 'M6 6h12v12H6zM10 10h4v4h-4zM9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3',
+  // Geometry read off the board itself - no engine, no model.
+  grid: 'M4 4h16v16H4zM4 10h16M4 15h16M10 4v16M15 4v16',
   knight:
     'M8 21h9M9 21c0-3 1-4.5 3.5-6 2-1.2 2.5-2.5 2.5-4 0-1-.5-1.8-1.5-2l-1 1.6-2-1L11 5l1.2-2H10L7.5 6.2 6 8.2c-.4.6-.2 1.3.4 1.6l1.6.7-1 2.5c-.6 1.5-.5 3 .5 4.3.7.9 1 2 1 3.7Z',
 }
